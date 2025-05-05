@@ -203,19 +203,6 @@ class MetaDataExtractor:
                 except Exception as e:
                     self.logger.error(f"MetaDataExtractor: Error during final cleanup: {e}")
 
-    def batch_insert_metadata(self, table_name, records):
-        # Deduplicate records by symbol
-        unique_records = {}
-        for record in records:
-            symbol = record['symbol']
-            unique_records[symbol] = record
-        
-        # Convert back to list
-        deduplicated_records = list(unique_records.values())
-        
-        # Now perform the batch insert with deduplicated records
-        # ... rest of your insert logic ...
-
 if __name__ == "__main__":
     # Load Data Pipeline Configuration
     mode = 'development'

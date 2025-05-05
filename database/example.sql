@@ -1,13 +1,27 @@
 -- select * from processed_staging;
-select * from resampled where symbol = 'AMD' and interval = 1 order by date desc;
--- select * from raw where symbol = 'VSA' order by date desc;
+select * from resampled where symbol = 'AESI' and interval = 1 order by date desc;
+
+select * from raw where symbol = 'AESI' order by date desc;
 -- select * from resampled_staging
--- Truncate table  resampled
+
+Truncate table  resampled
 SELECT 
     symbol, 
     MAX(date) AS max_date
-FROM raw
-GROUP BY symbol;
+FROM resampled
+WHERE interval = '1'
+GROUP BY symbol
+ORDER BY max_date ASC;
+
+DELETE FROM raw
+WHERE ctid IN (
+    SELECT ctid FROM (
+        SELECT ctid,
+               ROW_NUMBER() OVER (PARTITION BY symbol, high, close, low, open, volume ORDER BY date DESC) AS rn
+        FROM raw
+    ) t
+    WHERE t.rn > 1
+);
 
 -- CREATE OR REPLACE VIEW resampled_clean AS
 -- SELECT *
@@ -162,7 +176,7 @@ LEFT JOIN (
 ) c ON r.symbol = c.symbol
 WHERE r.date >= c.latest_date;
 
-
+-- Find the latest cut-off date from resampled table
 CREATE OR REPLACE VIEW latest_resampled AS
 SELECT 
     r.*, 
@@ -186,9 +200,61 @@ LEFT JOIN (
 ) c ON r.symbol = c.symbol
 WHERE r.date >= c.latest_date;
 
-SELECT * FROM latest_resampled
+SELECT * FROM latest_resampled where interval = 3 order by date asc
 
+-- Find the latest date of each symbol from raw
+WITH latest_date AS (
+                    SELECT MAX(date) as max_date 
+                    FROM raw
+                )
+                SELECT date, symbol, close 
+                FROM raw 
+                WHERE date = (SELECT max_date FROM latest_date)
+				
 -- drop record conditionally
 DELETE FROM resampled
 WHERE date >= '2025-04-11';
 
+SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0;
+WITH symbol_max AS (
+    SELECT symbol, MAX(date) AS symbol_max_date
+    FROM raw
+    GROUP BY symbol
+),
+overall_max AS (
+    SELECT MAX(symbol_max_date) AS max_date FROM symbol_max
+)
+-- SELECT symbol
+-- FROM symbol_max
+-- WHERE symbol_max_date < (SELECT max_date FROM overall_max)
+-- ORDER BY symbol_max_date ASC;
+
+
+DELETE FROM raw
+WHERE symbol IN (
+    SELECT symbol
+	FROM symbol_max
+	WHERE symbol_max_date < (SELECT max_date FROM overall_max)
+	ORDER BY symbol_max_date ASC
+);
+
+DELETE FROM symbol_metadata
+WHERE symbol IN (
+	SELECT symbol
+	FROM symbol_max
+	WHERE symbol_max_date < (SELECT max_date FROM overall_max)
+	ORDER BY symbol_max_date ASC
+)
+
+-- Sample: Delete symbols whose max date is not the latest
+DELETE FROM raw
+WHERE symbol IN (
+  SELECT symbol
+  FROM (
+    SELECT symbol, MAX(date) AS symbol_max_date
+    FROM raw
+    GROUP BY symbol
+  ) AS sm
+  WHERE symbol_max_date < (SELECT MAX(date) FROM raw)
+)
+AND date <= (SELECT MAX(date) FROM raw);

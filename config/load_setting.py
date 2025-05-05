@@ -2,7 +2,7 @@
 import yaml
 import os
 
-def load_setting(mode):
+def load_setting(status):
     """
     Loads the Data Pipeline configuration from the data_pipeline_config.yaml file.
     
@@ -15,7 +15,7 @@ def load_setting(mode):
     try:
         
         with open(config_path, "r") as file:
-            config = yaml.safe_load(file)[mode]
+            config = yaml.safe_load(file)[status]
         return config
     
     except FileNotFoundError:

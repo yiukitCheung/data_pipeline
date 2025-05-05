@@ -4,7 +4,7 @@ import traceback
 from pyspark.sql import SparkSession, Window
 from pyspark.sql.functions import (
     col, max as spark_max, min as spark_min, first, last, 
-    sum as spark_sum, lit, to_date, row_number, when, expr, create_map, explode, array
+        sum as spark_sum, lit, to_date, row_number, when, expr, create_map, explode, array, count
 )
 from pyspark.sql.functions import udf
 from pyspark.sql.types import IntegerType
@@ -15,7 +15,9 @@ from tools import postgres_client
 from dotenv import load_dotenv
 import os
 from datetime import datetime
-
+from prefect import get_run_logger
+import pytz
+import pandas_market_calendars as mcal
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -23,6 +25,7 @@ from tools.utilis import DateTimeTools
 
 load_dotenv()
 
+# Standard logging configuration for standalone execution
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ResampleProcessor:
@@ -38,6 +41,12 @@ class ResampleProcessor:
         self.intervals = intervals
         self.postgres_tool = postgres_client.PostgresTools(os.getenv('POSTGRES_URL'))
         self.mode = mode
+        
+        # Try to get Prefect logger, fall back to standard logger if not in Prefect context
+        try:
+            self.logger = get_run_logger()
+        except Exception:
+            self.logger = logging.getLogger(__name__)
         
     def _get_trading_days(self, start_date, end_date):
         """Get NYSE trading days for the given date range
@@ -59,7 +68,7 @@ class ResampleProcessor:
             })
             return self.spark.createDataFrame(trading_dates)
         except Exception as e:
-            logging.error(f"Error getting trading days: {e}")
+            self.logger.error(f"Error getting trading days: {e}")
             traceback.print_exc()
             return self.spark.createDataFrame(pd.DataFrame({'date': []}))
         
@@ -74,7 +83,7 @@ class ResampleProcessor:
             Filtered Spark DataFrame
         """
         if trading_days_df.count() == 0:
-            logging.warning("No trading days found, using all days")
+            self.logger.warning("No trading days found, using all days")
             return df
         
         trading_days_df = trading_days_df.withColumnRenamed("date", "trading_date")
@@ -84,7 +93,7 @@ class ResampleProcessor:
             "inner"
         ).drop("trading_date")
         
-        logging.info(f"Filtered to {filtered_df.count()} trading days across all symbols")
+        self.logger.info(f"Filtered to {filtered_df.count()} trading days across all symbols")
         return filtered_df
     
     def _create_candle_groups(self, df, interval, candle_offsets=None):
@@ -160,33 +169,63 @@ class ResampleProcessor:
                 ).otherwise(lit("in_progress"))
             )
     
-    def _update_in_progress(self, orginal_raw_df, latest_raw_df):
+    def _update_in_progress(self, orginal_resampled_df, latest_raw_df, interval):
         """Update the in_progress candles: modify close if still in progress, or mark complete if interval finished
         
         Args:
             orginal_raw_df: Input DataFrame with newly resampled OHLCV
             latest_raw_df: DataFrame with cutoff meta containing latest candle_id and date for in-progress
         """
-        # Get the latest date from the metadata
-        latest_date = latest_raw_df.agg(spark_max("date")).collect()[0][0]
-        
+        self.logger.info(f"Resampler: Updating in-progress candles for interval: {interval}")
         # Filter only in progress candles
-        df = orginal_raw_df.filter(col("status") == "in_progress")
+        df = orginal_resampled_df.filter(col("status") == "in_progress")
         if df.count() == 0:
-            logging.info(f"No in-progress candles found, skipping to next interval")
+            self.logger.info(f"Processing interval: {interval} - No in-progress candles found, skipping to next interval")
+            
+            df = df.withColumnRenamed("latest_candle_id", "candle_id")
+            df = df.drop("latest_date")
+            # Reorder the columns 
+            df = df.select("symbol", "interval", "candle_id", "date", "open", "high", "low", "close", "volume", "type", "status")
             return df
             
         # Define a UDF to compute days left to complete a candle
-        def days_left_to_complete(latest_date_str, interval):
+        def get_days_left_to_complete_candle(latest_candle_date: str, interval: str):
+            """
+            Get the number of days left to complete a candle.
+            Used in: resampler.py
+            """
             try:
-                # Convert the date string to datetime and extract just the date part
-                latest_date = pd.to_datetime(latest_date_str).date()
-                return DateTimeTools.get_days_left_to_complete_candle(str(latest_date), str(interval))
+                # Get NYSE calendar
+                nyse = mcal.get_calendar('NYSE')
+                
+                # Get current NY time
+                ny_tz = pytz.timezone('America/New_York')
+                today = datetime.now(ny_tz).strftime('%Y-%m-%d')
+                
+                # Convert latest_candle_date to datetime - handle time component
+                # Check if time component exists and use appropriate format
+                if ' ' in latest_candle_date:
+                    # Format with time component
+                    latest_candle_date = datetime.strptime(latest_candle_date, '%Y-%m-%d %H:%M:%S')
+                else:
+                    # Format without time component
+                    latest_candle_date = datetime.strptime(latest_candle_date, '%Y-%m-%d')
+                
+                # Get market schedule
+                schedule = nyse.schedule(start_date=latest_candle_date, end_date=today)
+                if schedule.empty:
+                    return 0  # Return 0 if market is closed today
+                
+                # Get the days left to complete the candle
+                days_left = int(interval) - len(schedule)
+            
+                return max(0, days_left)  # Ensure we don't return negative values
             except Exception as e:
-                logging.error(f"Failed to calculate days_left_to_complete: {e}")
-                return 0
-
-        days_left_udf = udf(days_left_to_complete, IntegerType())
+                # We can't use self.logger here since this runs on workers
+                print(f"Error in get_days_left_to_complete_candle: {e}")
+                return 0  # Default to 0 on error
+        
+        days_left_udf = udf(get_days_left_to_complete_candle, IntegerType())
         
         # Join to bring in the latest candle metadata (date, candle_id, interval)
         df = df.alias("df").join(
@@ -226,34 +265,65 @@ class ResampleProcessor:
             col("df.volume").alias("volume"),  # Keep original volume
             col("df.type").alias("type"),  # Keep original type
             col("status")  # Updated status based on days_left
-        )
+        ).sort("symbol", "date")
         
-        # Only filter the latest date
-        df = df.filter(col("date") == lit(latest_date))
-        df.show(20)
-        exit()
-        
+        # Crearte Rownumber for each symbol 
+        window_spec = Window.partitionBy("symbol").orderBy("date")
+        df = df.withColumn("row_num", row_number().over(window_spec))
+        df = df.filter(col("row_num") == 1)
+        df = df.drop("row_num")
+
+        self.logger.info(f"Processing interval: {interval} - Updated {df.count()} in-progress candles")
         return df
     
-    # def _add_new_candle(self, df, metadata_df):
-    #     """Add a new candle to the DataFrame
+    def _add_completed(self, original_resampled_df, latest_raw_df, interval):
+        """Add a new candle to the DataFrame for completed candles
     
-    #     Args:
-    #         df: Input DataFrame
-    #         metadata_df: DataFrame with cutoff meta containing latest candle_id and date for in-progress
-    #     """
-    #     # Filter only in progress candles
-    #     df = df.filter(col("status") == "complete")
-    #     if df.count() == 0:
-    #         logging.info(f"No complete candles found, skipping to next interval")
-    #         return df
-    
-    #     # Get the latest candle_id and date
-    #     latest_candle_id = metadata_df.agg(spark_max("candle_id")).collect()[0][0]
-    #     latest_date = metadata_df.agg(spark_max("date")).collect()[0][0]
-    
-    #     # Add a new candle
-    
+        Args:
+            original_resampled_df: Input DataFrame with resampled data
+            latest_raw_df: DataFrame with latest raw data for each symbol
+        """
+        self.logger.info(f"Resampler: Adding completed candles for interval: {interval}")
+        # Filter only complete candles
+        df = original_resampled_df.filter(col("status") == "complete")
+        
+        if df.count() == 0:
+            self.logger.info(f"Processing interval: {interval} - No complete candles found, skipping to next interval")
+            df = df.withColumnRenamed("latest_candle_id", "candle_id")
+            df = df.drop("latest_date")
+            
+            # Reorder the columns 
+            df = df.select("symbol", "interval", "candle_id", "date", "open", "high", "low", "close", "volume", "type", "status")
+            
+            return df
+        
+        # Get unique symbol and interval combinations from complete candles
+        symbol_intervals = df.select("symbol", "interval", "latest_candle_id").distinct()
+        
+        # Join with latest_raw_df to get latest data for each symbol
+        new_candles = symbol_intervals.alias("original_resampled").join(
+            latest_raw_df.alias("latest_raw"),
+            on=["symbol"],
+            how="left"
+        )
+        
+        # Create new candle entries using the latest raw data
+        new_candles = new_candles.select(
+            col("latest_raw.symbol"),
+            col("original_resampled.interval"),
+            (col("original_resampled.latest_candle_id") + 1).alias("candle_id"),
+            col("latest_raw.date").alias("date"),
+            col("latest_raw.open").alias("open"),  # Use latest raw open
+            col("latest_raw.high").alias("high"),  # Use latest raw high
+            col("latest_raw.low").alias("low"),    # Use latest raw low
+            col("latest_raw.close").alias("close"), # Use latest raw close
+            col("latest_raw.volume").alias("volume"), # Use latest raw volume 
+            lit("cs").alias("type"),     # Type is always "cs"
+            when(col("original_resampled.interval") == 1, lit("complete"))
+                .otherwise(lit("in_progress")).alias("status")  # Complete for interval=1, in_progress for others
+        )
+        self.logger.info(f"Processing interval: {interval} - Added {new_candles.count()} completed candles")
+        return new_candles
     
     def _process(self, df, interval, mode, latest_trading_date = None, metadata_df=None):
         """Process a single interval
@@ -266,7 +336,7 @@ class ResampleProcessor:
         Returns:
             Resampled DataFrame for the interval
         """
-        logging.info(f"Processing interval: {interval}")
+        self.logger.info(f"Processing interval: {interval}")    
         
         # ===============================
         # production mode
@@ -274,12 +344,19 @@ class ResampleProcessor:
         if mode == "production":
             # Filter to only the interval we want to fill the gap
             df = df.filter(col("interval") == interval)
+            
             # Update the in_progress 
-            df = self._update_in_progress(df, metadata_df)
-            
+            in_progress_df = self._update_in_progress(df, metadata_df, interval)
+            in_progress_df.show(10)
             # Add a new candle if complete
-            # df = self._add_new_candle(df, metadata_df)
+            completed_df = self._add_completed(df, metadata_df, interval)
+            completed_df.show(10)
+            # Combine the in_progress and completed candles
+            df = in_progress_df.unionAll(completed_df)
             
+            # Write to parquet
+            df.write.mode("overwrite").parquet(f"data/resampled/interval_{interval}.parquet")
+
             return df
         # ===============================
         # Reset mode
@@ -311,7 +388,7 @@ class ResampleProcessor:
         """
         try:
             if df.count() == 0:
-                logging.warning("Resampler: Empty DataFrame provided")
+                self.logger.warning("Resampler: Empty DataFrame provided")
                 return self.spark.createDataFrame([])
             
             # ===============================
@@ -337,7 +414,7 @@ class ResampleProcessor:
             
                 # Check if there is any data left after filtering
                 if df.count() == 0:
-                    logging.warning("Resampler: No data left after filtering")
+                    self.logger.warning("Resampler: No data left after filtering")
                     return self.spark.createDataFrame([])
             # Process data by interval
             resampled_dfs = []
@@ -353,11 +430,12 @@ class ResampleProcessor:
                 resampled_dfs.append(interval_df)
                 
             # Combine results cumulatively
-            resampled_df = reduce(lambda df1, df2: df1.unionAll(df2), resampled_dfs)            
+            resampled_df = reduce(lambda df1, df2: df1.unionAll(df2), resampled_dfs)  
+            exit()          
             return resampled_df
             
         except Exception as e:
-            logging.error(f"Resampler: Error in bulk processing: {e}")
+            self.logger.error(f"Resampler: Error in bulk processing: {e}")
             traceback.print_exc()
             return self.spark.createDataFrame([])
 

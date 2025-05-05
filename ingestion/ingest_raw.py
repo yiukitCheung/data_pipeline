@@ -90,7 +90,7 @@ class StockDataIngestor:
             self.logger.info(f"Ingestor: Error validating consumer: {e}")
             return False
     
-    def should_stop_ingesting(self, last_message_time, timeout_seconds=120):
+    def should_stop_ingesting(self, last_message_time, timeout_seconds=15):
         current_time = time.time()
         time_since_last_message = current_time - last_message_time
         

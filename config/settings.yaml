@@ -23,7 +23,6 @@ development:
       base_interval: 1d
   
   process:
-    
     datastream:
       required_intervals:
         - 5m
@@ -33,7 +32,6 @@ development:
       window_size:
         support_resistance: 5
         volume_spike: 10
-
     databatch:
       processed_db_name: 
         "processed_market_data"
@@ -45,9 +43,7 @@ development:
         - 5
         - 8
         - 13
-
   analytics:
-
     alert: 
       long_term: "long_term_alert"
       live: "live_streaming_alerts"
@@ -64,4 +60,4 @@ development:
       long_term: "long_term_sandbox_results"
       short_term: "short_term_sandbox_results"
 
-  mode: production
+    mode: "production"

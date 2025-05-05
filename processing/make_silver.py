@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from urllib.parse import urlparse
 from pyspark.sql.types import StructField, TimestampType, StringType, IntegerType, DoubleType, StructType
 import ta
-
+from pyspark.sql.functions import max as spark_max
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -73,18 +73,23 @@ class Processor:
         try:
             if self.mode == "reset":
                 raw_df = self.jdbc_tool.read_table(self.raw_table_name)
+
                 raw_df = raw_df.filter(col("date") < lit("2025-05-02"))
                 return raw_df, None
+            
             elif self.mode == "production":
                                 
                 # Fetch the latest raw data from the raw table
                 latest_raw_df = self.postgres_tool.fetch_latest_symbol_data(self.raw_table_name)
                 latest_raw_df = self.spark.createDataFrame(latest_raw_df)
 
+                max_date = latest_raw_df.agg(spark_max("date")).collect()[0][0]
+                latest_raw_df = latest_raw_df.filter(col("date") == lit(max_date))
+                
                 # Fetch the latest resampled data view from postgres
                 latest_resampled_df = self.jdbc_tool.read_table(table_name="latest_resampled")
                 latest_resampled_df = latest_resampled_df.repartition(256, "symbol")
-
+                
                 return latest_resampled_df, latest_raw_df
 
             elif self.mode == "catch_up":
@@ -96,7 +101,9 @@ class Processor:
                 latest_raw_df = self.postgres_tool.fetch_latest_symbol_data(self.raw_table_name)
                 latest_raw_df = self.spark.createDataFrame(latest_raw_df)
                 
+
                 return latest_resampled_df, latest_raw_df
+            
             else:
                 logging.warning("Processor: No data to process")
                 exit()
@@ -162,8 +169,6 @@ class Processor:
             resampler = ResampleProcessor(self.spark, self.new_intervals, self.mode)
             resampled_df = resampler.apply(df, metadata_df, mode=self.mode)
             
-            # Drop the duplicate rows
-            resampled_df = resampled_df.dropDuplicates(["date", "symbol", "interval"])
             # Cache the resampled DataFrame
             resampled_df.cache()
             # Save to PostgreSQL efficiently

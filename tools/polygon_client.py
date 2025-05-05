@@ -116,8 +116,57 @@ class PolygonTools:
         except Exception as e:
             logging.error(f"PolygonTools: Error fetching OHLCV data for {ticker}: {e}")
             return None
+    def get_market_status(self):
+        """
+        Get the market status and parse the response into a dictionary.
+        Returns a dictionary containing market status information including:
+        - after_hours: bool
+        - currencies: dict with crypto and fx status
+        - early_hours: bool
+        - exchanges: dict with nasdaq, nyse, and otc status
+        - indices: dict with various indices status
+        - market: str (open/closed)
+        - server_time: str (ISO format timestamp)
+        """
+        try:
+            result = self.client.get_market_status()
+            
+            # Parse the response into a dictionary
+            market_status = {
+                'after_hours': result.after_hours,
+                'currencies': {
+                    'crypto': result.currencies.crypto,
+                    'fx': result.currencies.fx
+                },
+                'early_hours': result.early_hours,
+                'exchanges': {
+                    'nasdaq': result.exchanges.nasdaq,
+                    'nyse': result.exchanges.nyse,
+                    'otc': result.exchanges.otc
+                },
+                'indices': {
+                    's_and_p': result.indicesGroups.s_and_p,
+                    'societe_generale': result.indicesGroups.societe_generale,
+                    'cgi': result.indicesGroups.cgi,
+                    'msci': result.indicesGroups.msci,
+                    'ftse_russell': result.indicesGroups.ftse_russell,
+                    'mstar': result.indicesGroups.mstar,
+                    'mstarc': result.indicesGroups.mstarc,
+                    'cccy': result.indicesGroups.cccy,
+                    'nasdaq': result.indicesGroups.nasdaq,
+                    'dow_jones': result.indicesGroups.dow_jones
+                },
+                'market': result.market,
+                'server_time': result.server_time
+            }
+            
+            return market_status['market']
+            
+        except Exception as e:
+            logging.error(f"PolygonTools: Error getting market status: {e}")
+            return None
 
 if __name__ == "__main__":
     polygon_client = PolygonTools(api_key=os.getenv('POLYGON_API_KEY'))
     # print(polygon_client.fetch_all_tickers())
-    print(polygon_client.fetch_ticker_ohlcv('AAPL', '2025-03-28', '2025-03-28'))
+    print(polygon_client.get_market_status())

@@ -122,13 +122,13 @@ class PostgresTools:
                     SELECT MAX(date) as max_date 
                     FROM {table_name}
                 )
-                SELECT date, symbol, close 
+                SELECT date, symbol, open, high, low, close, volume, type
                 FROM {table_name} 
                 WHERE date = (SELECT max_date FROM latest_date)
             """)
             
             results = cursor.fetchall()
-            columns = ['date', 'symbol', 'close']
+            columns = ['date', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'type']
             return pd.DataFrame(results, columns=columns)
             
         except Exception as e:

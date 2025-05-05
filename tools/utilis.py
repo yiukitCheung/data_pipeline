@@ -12,7 +12,6 @@ class DateTimeTools:
     def get_current_trading_date():
         """
         Get the most current trading date.
-        Used in: send_alerts.py, extractor.py
         """
         today = pd.to_datetime('today')
         current_date = today
@@ -28,7 +27,7 @@ class DateTimeTools:
         return current_date
 
     @staticmethod
-    def determine_trading_hour(interval: str):
+    def determine_trading_hour(now: datetime):
         """
         Determine the trading hours for a given interval.
         Used in: WebSocket.py
