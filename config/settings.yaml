@@ -60,4 +60,4 @@ development:
       long_term: "long_term_sandbox_results"
       short_term: "short_term_sandbox_results"
 
-  mode: "reset"
+  mode: "production"
