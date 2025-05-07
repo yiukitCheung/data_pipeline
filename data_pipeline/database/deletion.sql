@@ -1,3 +1,0 @@
--- TRUNCATE TABLE raw;
--- TRUNCATE TABLE resampled;
--- TRUNCATE TABLE processed;
