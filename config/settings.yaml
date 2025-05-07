@@ -9,7 +9,7 @@ development:
       rate_limit: 10
       chunk_delay: 10
       max_workers: 10
-      batch_size: 5000
+      batch_size: 1000
       max_batch_time: 120
     datastream:
       batch:
@@ -60,4 +60,4 @@ development:
       long_term: "long_term_sandbox_results"
       short_term: "short_term_sandbox_results"
 
-    mode: "production"
+  mode: "reset"

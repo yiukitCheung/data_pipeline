@@ -1,10 +1,14 @@
 from kafka import KafkaProducer
 import pandas as pd
 from functools import partial
-import json, logging, pytz, aiohttp, asyncio
+import json, logging, pytz
 from datetime import datetime
 from dotenv import load_dotenv
 from prefect import get_run_logger
+import concurrent.futures
+import threading
+import time
+from curl_cffi import requests
 
 import sys, os 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,6 +35,8 @@ class MetaDataExtractor:
         self.topic_names = settings['data_extract']['meta']['topic_names']
         self.table_name = settings['data_extract']['meta']['table_name']
         self.chunk_size = settings['data_extract']['meta']['chunk_size']
+        self.max_workers = settings['data_extract']['meta'].get('max_workers', 10)
+        
         # Initialize tools
         self.timescale_tool = postgres_client.PostgresTools(POSTGRES_URL)
         self.polygon_tool = polygon_client.PolygonTools(POLYGON_API_KEY)
@@ -40,16 +46,13 @@ class MetaDataExtractor:
         # Find all available symbols from polygon api
         self.symbols = self.polygon_tool.fetch_all_tickers()
         
-        # Initialize async components
-        self.semaphore = asyncio.Semaphore(100)  # Limit concurrent requests
+        # Initialize thread-safe components
         self.symbol_locks = {}  # Locks for each symbol
-        self.session = None
         
         # Initialize Kafka producer
         try:
             # Delete and recreate topic if reset mode is enabled
             if self.mode == "reset":
-                self.kafka_tool.delete_kafka_topics(self.topic_names, KAFKA_BROKER)
                 self.kafka_tool.create_kafka_topic(self.topic_names, KAFKA_BROKER)
                 self.logger.info(f"MetaDataExtractor: Recreated Kafka topic {self.topic_names}")
 
@@ -61,59 +64,41 @@ class MetaDataExtractor:
         except Exception as e:
             self.logger.error(f"MetaDataExtractor: Error initializing Kafka producer: {e}")
             raise e
-        
-    async def init_session(self):
-        """Initialize aiohttp session"""
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
 
-    async def close_session(self):
-        """Close aiohttp session"""
-        if self.session:
-            await self.session.close()
-            self.session = None
-
-    async def _get_symbol_meta_async(self, symbol, max_retries=3):
-        """Async version of fetching symbol metadata"""
+    def _get_symbol_meta(self, symbol, max_retries=3):
+        """Thread-safe version of fetching symbol metadata"""
         try:
             if symbol not in self.symbol_locks:
-                self.symbol_locks[symbol] = asyncio.Lock()
+                self.symbol_locks[symbol] = threading.Lock()
 
-            async with self.symbol_locks[symbol]:
-                async with self.semaphore:
-                    loop = asyncio.get_event_loop()
-                    try:
-                        # Fetch metadata using the polygon client
-                        meta_data = await loop.run_in_executor(
-                            None,
-                            partial(self.polygon_tool.fetch_meta, ticker=symbol)
-                        )
-                        
-                        if meta_data:
-                            # Add timestamp to metadata
-                            return meta_data, symbol
-                        else:
-                            self.logger.warning(f"MetaDataExtractor: No metadata returned for {symbol}")
-                            return None, symbol
-                            
-                    except Exception as e:
-                        if "Too Many Requests" in str(e):
-                            self.logger.warning(f"Rate limited for {symbol}, waiting 30s")
-                            await asyncio.sleep(30)
-                            return None, symbol
-                        self.logger.error(f"MetaDataExtractor: Error fetching metadata for {symbol}: {e}")
+            with self.symbol_locks[symbol]:
+                try:
+                    # Fetch metadata using the polygon client
+                    meta_data = self.polygon_tool.fetch_meta(ticker=symbol)
+                    
+                    if meta_data:
+                        # Add timestamp to metadata
+                        return meta_data, symbol
+                    else:
+                        self.logger.warning(f"MetaDataExtractor: No metadata returned for {symbol}")
                         return None, symbol
+                        
+                except Exception as e:
+                    if "Too Many Requests" in str(e):
+                        self.logger.warning(f"Rate limited for {symbol}, waiting 30s")
+                        time.sleep(30)
+                        return None, symbol
+                    self.logger.error(f"MetaDataExtractor: Error fetching metadata for {symbol}: {e}")
+                    return None, symbol
 
         except Exception as e:
-            self.logger.error(f"MetaDataExtractor: Error in async metadata fetch for {symbol}: {e}")
+            self.logger.error(f"MetaDataExtractor: Error in metadata fetch for {symbol}: {e}")
             return None, symbol
 
-    async def _produce_meta_to_kafka_async(self, meta_data, symbol: str):
-        """Async version of producing metadata to Kafka"""
+    def _produce_meta_to_kafka(self, meta_data, symbol: str):
+        """Thread-safe version of producing metadata to Kafka"""
         if not meta_data:
             return
-        
-        loop = asyncio.get_event_loop()
         
         try:
             # Create metadata record for kafka
@@ -127,69 +112,60 @@ class MetaDataExtractor:
                 'type': meta_data['type']
             }
             
-            # Use run_in_executor without timeout
-            future = await loop.run_in_executor(
-                None,
-                lambda: self.batch_producer.send(self.topic_names, meta_record)
-            )
-            
-            # Wait for acknowledgment without timeout
-            await loop.run_in_executor(None, future.get)
+            # Send to Kafka
+            self.batch_producer.send(self.topic_names, meta_record)
+            self.batch_producer.flush()
             self.logger.info(f"Successfully sent metadata for {symbol}")
             
         except Exception as e:
             self.logger.error(f"Failed to send metadata for {symbol}: {e}")
-            # Add to retry queue
 
-    async def fetch_and_produce_meta_async(self):
-        """Async version of fetching and producing metadata"""
-        await self.init_session()
-        
+    def _process_symbol(self, symbol):
+        """Process a single symbol: fetch metadata and produce to Kafka"""
+        try:
+            # Fetch metadata
+            meta_data, symbol = self._get_symbol_meta(symbol)
+            
+            if meta_data is not None:
+                self._produce_meta_to_kafka(meta_data, symbol)
+                
+        except Exception as e:
+            self.logger.error(f"Error processing symbol {symbol}: {e}")
+            raise
+
+    def fetch_and_produce_meta(self):
+        """Process all symbols in parallel using thread pool"""
         try:
             # Process symbols in chunks to avoid overwhelming the API
-            chunk_size = self.chunk_size
-            chunks = [self.symbols[i:i + chunk_size] 
-                    for i in range(0, len(self.symbols), chunk_size)]
+            chunks = [self.symbols[i:i + self.chunk_size] 
+                    for i in range(0, len(self.symbols), self.chunk_size)]
             
             for chunk in chunks:
-                # Process each chunk
-                tasks = [
-                    asyncio.create_task(self._get_symbol_meta_async(symbol))
-                    for symbol in chunk
-                ]
-                
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                # Process results for this chunk
-                for result in results:
-                    if isinstance(result, Exception):
-                        self.logger.error(f"MetaDataExtractor: Task error: {result}")
-                        continue
+                # Create a thread pool for processing this chunk
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    # Submit all tasks for this chunk
+                    futures = [executor.submit(self._process_symbol, symbol) for symbol in chunk]
                     
-                    meta_data, symbol = result
-                    if meta_data is not None:
-                        await self._produce_meta_to_kafka_async(meta_data, symbol)
-                            
+                    # Wait for all tasks in this chunk to complete
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            future.result()  # This will raise any exceptions that occurred
+                        except Exception as e:
+                            self.logger.error(f"Task error: {e}")
+                
                 # Add delay between chunks
-                await asyncio.sleep(2)  # 2 second delay between chunks
+                time.sleep(2)  # 2 second delay between chunks
                 self.logger.info(f"MetaDataExtractor: Processed chunk of {len(chunk)} symbols")
                 
-        finally:
-            await self.close_session()
-
-    async def run_async(self):
-        """Async version of run"""
-        try:
-            await self.fetch_and_produce_meta_async()
-            self.logger.info("MetaDataExtractor: Metadata fetching complete")
         except Exception as e:
-            self.logger.error(f"MetaDataExtractor error: {e}")
+            self.logger.error(f"Error in meta processing: {e}")
             raise
 
     def run(self):
         """Entry point with proper cleanup"""
         try:
-            asyncio.run(self.run_async())
+            self.fetch_and_produce_meta()
+            self.logger.info("MetaDataExtractor: Metadata fetching complete")
         except KeyboardInterrupt:
             self.logger.info("MetaDataExtractor: Received interrupt signal")
         except Exception as e:

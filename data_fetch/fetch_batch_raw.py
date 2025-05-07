@@ -7,6 +7,7 @@ import threading
 from datetime import datetime
 from functools import partial
 import concurrent.futures
+from curl_cffi import requests
 
 import pandas as pd
 import pytz
@@ -52,7 +53,10 @@ class BatchDataExtractor:
         self.session = None
         self.chunk_delay = settings['data_extract']['raw']['chunk_delay']
         self.max_workers = settings['data_extract']['raw']['max_workers']
-
+        
+        # Initialize browser-like session for yfinance
+        self.yf_session = requests.Session(impersonate="chrome")
+    
         # Initialize Kafka producer
         self._init_kafka_producer()
         
@@ -146,30 +150,23 @@ class BatchDataExtractor:
             with self.symbol_locks[symbol]:
                 latest_record = self.last_fetch_dict.get(symbol)
                 if latest_record is None:
-                    try:
-                        self.logger.info(f"BatchDataExtractor: No previous data for {symbol}, fetching all data")
-                        # Simple direct call like in notebook
-                        data_df = yf.Ticker(symbol).history(period='max', interval='1d')
+                    self.logger.info(f"BatchDataExtractor: No previous data for {symbol}, fetching all data")
+                    # Use browser-like session for yfinance
+                    ticker = yf.Ticker(symbol, session=self.yf_session)
+                    data_df = ticker.history(period='max', interval='1d')
+                    
+                    if data_df.empty:
+                        self.logger.warning(f"BatchDataExtractor: No data returned for {symbol}")
+                        return None, symbol
                         
-                        if data_df.empty:
-                            self.logger.warning(f"BatchDataExtractor: No data returned for {symbol}")
-                            return None, symbol
-                            
-                        # Reset the index and standardize columns
-                        data_df = data_df.reset_index()
-                        data_df = data_df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
-                        data_df.columns = ['t', 'o', 'h', 'l', 'c', 'v']
+                    # Reset the index and standardize columns
+                    data_df = data_df.reset_index()
+                    data_df = data_df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+                    data_df.columns = ['t', 'o', 'h', 'l', 'c', 'v']
+                    
+                    data_json = json.loads(data_df.to_json(orient='records'))
+                    return data_json, symbol
                         
-                        data_json = json.loads(data_df.to_json(orient='records'))
-                        return data_json, symbol
-                        
-                    except Exception as e:
-                        if "Too Many Requests" in str(e):
-                            self.logger.warning(f"Rate limited for {symbol}, waiting 30s")
-                            time.sleep(30)  # Wait 30 seconds on rate limit
-                            return None, symbol
-                        raise e
-                
                 # Case 2: We have data but we are not sure if it's current
                 elif latest_record:
                     # case 2.1: The last date in the database is today

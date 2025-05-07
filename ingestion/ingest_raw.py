@@ -135,7 +135,7 @@ class StockDataIngestor:
                 current_time = time.time()
                 
                 # Log status periodically
-                if current_time - last_batch_time > 30:
+                if current_time - last_batch_time > self.max_batch_time:
                     self.logger.info(f"Ingestor: Still polling. Current batch size: {len(batch)}")
                     last_batch_time = current_time
 

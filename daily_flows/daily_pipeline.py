@@ -22,6 +22,8 @@ import time
 from datetime import timedelta
 logger = logging.getLogger(__name__)
 
+
+
 @flow(name="daily-pipeline")
 def daily_pipeline(settings):
     """Main pipeline flow"""
@@ -39,28 +41,37 @@ def daily_pipeline(settings):
     except Exception as e:
         logger.error(f"Pipeline error: {e}")
         raise
-
+@flow(name="reset-mode-pipeline")
 def reset_mode_pipeline(settings):
     """Reset mode pipeline"""
     try:
-        # Step 1. Ingest meta data
-        meta_extractor_future = run_meta_extractor.submit(settings)
-        meta_ingestor_future = run_meta_ingestor.submit(settings)
+        # # Step 1. Run meta extractor and ingestor in parallel
+        # meta_ingestor_future = run_meta_ingestor.submit(settings)
+        # meta_extractor_future = run_meta_extractor.submit(settings)
         
-        # Step 2. Ingest raw data
-        batch_extractor_future = run_batch_extractor.submit(settings)
+        # # Wait for both meta tasks to complete
+        # meta_extractor_result = meta_extractor_future.result()
+        # meta_ingestor_result = meta_ingestor_future.result()
+        
+        # if meta_extractor_future.state.is_failed():
+        #     raise Exception("Meta extractor failed")
+        # if meta_ingestor_future.state.is_failed():
+        #     raise Exception("Meta ingestor failed")
+        
+        # Step 2. Run batch extractor and ingestor in parallel
         batch_ingestor_future = run_batch_ingestor.submit(settings)
+        batch_extractor_future = run_batch_extractor.submit(settings)
         
-        # Check results
-        if meta_extractor_future.state.is_failed():
-            raise Exception("Meta extractor failed")
-        if meta_ingestor_future.state.is_failed():
-            raise Exception("Meta ingestor failed")
+        
+        # Wait for both batch tasks to complete
+        batch_extractor_result = batch_extractor_future.result()
+        batch_ingestor_result = batch_ingestor_future.result()
+        
         if batch_extractor_future.state.is_failed():
             raise Exception("Batch extractor failed")
         if batch_ingestor_future.state.is_failed():
             raise Exception("Batch ingestor failed")
-        
+            
     except Exception as e:
         logger.error(f"Pipeline error: {e}")
         raise
@@ -88,9 +99,11 @@ def run_meta_ingestor(settings):
 
 
 if __name__ == "__main__":
-    polygon_client = PolygonTools(api_key=os.getenv('POLYGON_API_KEY'))
-
+    settings = load_setting(status="development")
     # Continuous daily run loop
+    if settings.get("mode") == "reset":
+        reset_mode_pipeline(settings)
+        exit()
     while True:
         now = datetime.now(ZoneInfo("America/New_York"))
         target_hour = 9  # 9 AM
@@ -111,6 +124,7 @@ if __name__ == "__main__":
             continue
 
         # After 9:30 AM, check market status
+        polygon_client = PolygonTools(api_key=os.getenv("POLYGON_API_KEY"))
         market_status = polygon_client.get_market_status()
         if market_status == 'open':
             settings = load_setting(status="development")
