@@ -125,5 +125,5 @@ if __name__ == "__main__":
         print("Pipeline completed for the day. Sleeping until next run...")
         now = datetime.now(ZoneInfo("America/New_York"))
         next_run = datetime.combine(now.date(), datetime.min.time(), tzinfo=ZoneInfo("America/New_York")) + timedelta(days=1, hours=9, minutes=30)
-        sleep_seconds = (next_run - now).total_seconds()
+        sleep_seconds = (next_run - now).total_seconds() - 10
         time.sleep(sleep_seconds)
