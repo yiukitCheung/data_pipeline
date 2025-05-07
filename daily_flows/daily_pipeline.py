@@ -5,12 +5,11 @@ load_dotenv()  # Load environment variables first
 from prefect import flow, task
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from data_fetch.fetch_batch_raw import BatchDataExtractor
-from ingestion.ingest_raw import StockDataIngestor
-from data_fetch.fetch_meta import MetaDataExtractor
-from ingestion.ingest_meta import StockMetaIngestor
-from processing.make_silver import Processor
-from processing.make_gold import SignalsGenerator   
+from fetch.batch import BatchDataExtractor
+from ingest.batch import StockDataIngestor
+from fetch.meta import MetaDataExtractor
+from ingest.meta import StockMetaIngestor
+
 from config.load_setting import load_setting
 
 from tools.polygon_client import PolygonTools
