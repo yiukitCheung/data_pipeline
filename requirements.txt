@@ -23,11 +23,13 @@ colorama==0.4.6
 comm==0.2.2
 coolname==2.2.0
 cryptography==44.0.2
+curl_cffi==0.10.0
 dateparser==1.2.1
 debugpy==1.8.13
 decorator==5.2.1
 Deprecated==1.2.18
 docker==7.1.0
+duckdb==1.2.2
 exceptiongroup==1.2.2
 exchange_calendars==4.10
 executing==2.2.0
@@ -83,6 +85,7 @@ pendulum==3.0.0
 pexpect==4.9.0
 pi==0.1.2
 platformdirs==4.3.7
+polars==1.29.0
 polygon-api-client==1.14.4
 prefect==3.2.15
 prometheus_client==0.21.1
