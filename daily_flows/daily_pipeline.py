@@ -125,6 +125,7 @@ if __name__ == "__main__":
         # After 9:30 AM, check market status
         polygon_client = PolygonTools(api_key=os.getenv("POLYGON_API_KEY"))
         market_status = polygon_client.get_market_status()
+        print(f"Market status: {market_status}")
         if market_status == 'open':
             settings = load_setting(status="development")
             if settings.get("mode") == "production":
