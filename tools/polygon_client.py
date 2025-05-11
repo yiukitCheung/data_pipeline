@@ -160,7 +160,7 @@ class PolygonTools:
                 'server_time': result.server_time
             }
             
-            return market_status['market']
+            return market_status
             
         except Exception as e:
             logging.error(f"PolygonTools: Error getting market status: {e}")

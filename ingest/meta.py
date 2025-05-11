@@ -2,7 +2,7 @@ from kafka import KafkaConsumer
 import pandas as pd
 from datetime import datetime
 import sys, os, pytz, logging, time, json
-from tools import utilis, kafka_client, postgres_client
+from tools import kafka_client, postgres_client, utils
 from prefect import get_run_logger
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv  

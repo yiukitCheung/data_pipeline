@@ -16,7 +16,6 @@ class MakeSilver:
                 'public', 'raw'
             );
         """)
-
     @staticmethod
     def fibonacci(n):
         """Generate Fibonacci sequence up to n numbers"""

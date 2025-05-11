@@ -19,7 +19,7 @@ from prefect import get_run_logger
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Local imports
-from tools import utilis, postgres_client, kafka_client, polygon_client
+from tools import postgres_client, kafka_client, polygon_client, utils
 from config.load_setting import load_setting
 
 # Configure logging
@@ -83,7 +83,7 @@ class BatchDataExtractor:
             
     def _init_production_mode(self):
         """Initialize production mode specific components"""
-        result = utilis.DateTimeTools.determine_trading_hour('5m')
+        result = utils.DateTimeTools.determine_trading_hour('5m')
         if result:
             _, _, self.market_close = result
         else:

@@ -9,9 +9,8 @@ from fetch.batch import BatchDataExtractor
 from ingest.batch import StockDataIngestor
 from fetch.meta import MetaDataExtractor
 from ingest.meta import StockMetaIngestor
-
 from config.load_setting import load_setting
-
+from tools.utils import DateTimeTools
 from tools.polygon_client import PolygonTools
 import logging
 
@@ -23,9 +22,21 @@ logger = logging.getLogger(__name__)
 
 
 
-@flow(name="daily-pipeline")
-def daily_pipeline(settings):
-    """Main pipeline flow"""
+@flow(name="bronze-pipeline")
+def bronze_pipeline(settings):
+    """Main pipeline flow — runs after market close if today is a trading day"""
+    
+    # Get the market status
+    polygon_tools = PolygonTools(os.getenv("POLYGON_API_KEY"))
+    market_status = polygon_tools.get_market_status()
+    
+    # Check if today is a trading day
+    if not DateTimeTools.is_trading_day():
+        logger.info(f"Today is not a trading day, skipping pipeline")
+        return
+
+    # Skip market open check — we WANT to run after market closes
+    
     try:
         # Submit batch tasks concurrently
         batch_extractor_future = run_batch_extractor.submit(settings)
@@ -40,28 +51,28 @@ def daily_pipeline(settings):
     except Exception as e:
         logger.error(f"Pipeline error: {e}")
         raise
+    
 @flow(name="reset-mode-pipeline")
 def reset_mode_pipeline(settings):
     """Reset mode pipeline"""
     try:
-        # # Step 1. Run meta extractor and ingestor in parallel
-        # meta_ingestor_future = run_meta_ingestor.submit(settings)
-        # meta_extractor_future = run_meta_extractor.submit(settings)
+        # Step 1. Run meta extractor and ingestor in parallel
+        meta_ingestor_future = run_meta_ingestor.submit(settings)
+        meta_extractor_future = run_meta_extractor.submit(settings)
         
-        # # Wait for both meta tasks to complete
-        # meta_extractor_result = meta_extractor_future.result()
-        # meta_ingestor_result = meta_ingestor_future.result()
+        # Wait for both meta tasks to complete
+        meta_extractor_result = meta_extractor_future.result()
+        meta_ingestor_result = meta_ingestor_future.result()
         
-        # if meta_extractor_future.state.is_failed():
-        #     raise Exception("Meta extractor failed")
-        # if meta_ingestor_future.state.is_failed():
-        #     raise Exception("Meta ingestor failed")
+        if meta_extractor_future.state.is_failed():
+            raise Exception("Meta extractor failed")
+        if meta_ingestor_future.state.is_failed():
+            raise Exception("Meta ingestor failed")
         
         # Step 2. Run batch extractor and ingestor in parallel
         batch_ingestor_future = run_batch_ingestor.submit(settings)
         batch_extractor_future = run_batch_extractor.submit(settings)
-        
-        
+
         # Wait for both batch tasks to complete
         batch_extractor_result = batch_extractor_future.result()
         batch_ingestor_result = batch_ingestor_future.result()
@@ -94,50 +105,3 @@ def run_meta_extractor(settings):
 def run_meta_ingestor(settings):
     meta_ingestor = StockMetaIngestor(settings)
     meta_ingestor.run()
-    
-
-
-if __name__ == "__main__":
-    settings = load_setting(status="development")
-    # Continuous daily run loop
-    if settings.get("mode") == "reset":
-        reset_mode_pipeline(settings)
-        exit()
-    while True:
-        now = datetime.now(ZoneInfo("America/New_York"))
-        target_hour = 9  # 9 AM
-        target_minute = 30
-
-        # If it's before 9:30 AM ET
-        if now.hour < target_hour or (now.hour == target_hour and now.minute < target_minute):
-            time_diff_minutes = ((target_hour * 60 + target_minute) - (now.hour * 60 + now.minute))
-            if time_diff_minutes > 120:
-                sleep_duration = 7200  # Sleep 2 hours
-            elif time_diff_minutes > 60:
-                sleep_duration = 300  # Sleep 5 minutes
-            else:
-                sleep_duration = 60  # Sleep 1 minute
-
-            print(f"Waiting for 9:30 AM ET... sleeping {sleep_duration // 60} minutes.")
-            time.sleep(sleep_duration)
-            continue
-
-        # After 9:30 AM, check market status
-        polygon_client = PolygonTools(api_key=os.getenv("POLYGON_API_KEY"))
-        market_status = polygon_client.get_market_status()
-        print(f"Market status: {market_status}")
-        if market_status == 'open':
-            settings = load_setting(status="development")
-            if settings.get("mode") == "production":
-                if now.hour == 16 and now.minute >= 30:
-                    daily_pipeline(settings)
-            elif settings.get("mode") == "reset":
-                if now.hour == 16 and now.minute >= 30:
-                    reset_mode_pipeline(settings)
-
-        # Wait until next day
-        print("Pipeline completed for the day. Sleeping until next run...")
-        now = datetime.now(ZoneInfo("America/New_York"))
-        next_run = datetime.combine(now.date(), datetime.min.time(), tzinfo=ZoneInfo("America/New_York")) + timedelta(days=1, hours=9, minutes=30)
-        sleep_seconds = (next_run - now).total_seconds() - 10
-        time.sleep(sleep_seconds)
