@@ -13,7 +13,7 @@ from config.load_setting import load_setting
 from tools.utils import DateTimeTools
 from tools.polygon_client import PolygonTools
 import logging
-
+from prefect import get_run_logger
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import time
@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 @flow(name="bronze-pipeline")
 def bronze_pipeline(settings):
     """Main pipeline flow — runs after market close if today is a trading day"""
+    
+    logger = get_run_logger()
+    logger.info("✅ Successfully initialized bronze_pipeline flow.")
+    logger.info(f"Settings received: {settings}")
+
     
     # Get the market status
     polygon_tools = PolygonTools(os.getenv("POLYGON_API_KEY"))
