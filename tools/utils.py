@@ -2,7 +2,7 @@ import pandas as pd
 import pytz
 import pandas_market_calendars as mcal
 from datetime import datetime
-
+from zoneinfo import ZoneInfo
 # =============================================== #
 # ===============  DateTime Tools  ============== #
 # =============================================== #
@@ -66,6 +66,18 @@ class DateTimeTools:
         
         return trading_hours, market_open, market_close
 
+    @staticmethod
+    def is_trading_day():
+        """
+        Check if the market is open at the given server time.
+        """
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        nyse = mcal.get_calendar('NYSE')
+        schedule = nyse.schedule(start_date=today, end_date=today)
+        if schedule.empty:
+            return False  # Return False if market is closed today
+        return True
+    
     @staticmethod
     def get_days_left_to_complete_candle(latest_candle_date: datetime, interval: str):
         """

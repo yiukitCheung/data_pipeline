@@ -2,7 +2,7 @@
 import yaml
 import os
 
-def load_setting(status):
+def load_setting(status = "development"):
     """
     Loads the Data Pipeline configuration from the data_pipeline_config.yaml file.
     
