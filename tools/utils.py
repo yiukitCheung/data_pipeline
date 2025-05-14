@@ -27,7 +27,7 @@ class DateTimeTools:
         return current_date
 
     @staticmethod
-    def determine_trading_hour(now: datetime):
+    def determine_trading_hour(interval: str):
         """
         Determine the trading hours for a given interval.
         Used in: WebSocket.py

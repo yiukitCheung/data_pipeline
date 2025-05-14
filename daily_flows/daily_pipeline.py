@@ -20,6 +20,7 @@ import time
 from datetime import timedelta
 logger = logging.getLogger(__name__)
 
+from prefect.filesystems import LocalFileSystem
 
 
 @flow(name="bronze-pipeline")
@@ -29,19 +30,12 @@ def bronze_pipeline(settings):
     logger = get_run_logger()
     logger.info("✅ Successfully initialized bronze_pipeline flow.")
     logger.info(f"Settings received: {settings}")
-
-    
-    # Get the market status
-    polygon_tools = PolygonTools(os.getenv("POLYGON_API_KEY"))
-    market_status = polygon_tools.get_market_status()
     
     # Check if today is a trading day
     if not DateTimeTools.is_trading_day():
         logger.info(f"Today is not a trading day, skipping pipeline")
         return
 
-    # Skip market open check — we WANT to run after market closes
-    
     try:
         # Submit batch tasks concurrently
         batch_extractor_future = run_batch_extractor.submit(settings)

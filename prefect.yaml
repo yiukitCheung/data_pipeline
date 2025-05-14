@@ -13,29 +13,22 @@ build: null
 push: null
 
 # pull section allows you to provide instructions for cloning this project in remote locations
-pull:
-- prefect.deployments.steps.git_clone:
-    repository: https://github.com/yiukitCheung/data_pipeline.git
-    branch: olap
-    access_token: '{{ prefect.blocks.secret.deployment-bronze-pipeline-bronze-pipeline-repo-token
-      }}'
+pull: null
 
 # the deployments section allows you to provide configuration for deploying flows
 deployments:
 - name: bronze-pipeline
   version: null
   tags: []
-  concurrency_limit: null
-  description: "Main pipeline flow \u2014 runs after market close if today is a trading\
-    \ day"
+  description: "Main pipeline flow — runs after market close if today is a trading day"
   entrypoint: daily_flows/daily_pipeline.py:bronze_pipeline
   parameters: {}
   work_pool:
-    name: bronze pieline
+    name: bronze-pipeline
     work_queue_name: null
     job_variables: {}
   schedules:
-  - cron: 30 4 * * 1-5
+  - cron: 30 16 * * 1-5
     timezone: America/New_York
     day_or: true
     active: true
