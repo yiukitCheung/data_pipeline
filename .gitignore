@@ -1,4 +1,4 @@
 .env 
 .dp
 __pycache__
-
+storage/silver/analytics.duckdb

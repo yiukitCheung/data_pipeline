@@ -9,7 +9,7 @@ deployment = bronze_pipeline.serve(
     name="bronze-pipeline-deployment",
     parameters={"settings": settings},
     work_queue_name="default",  # This is the default queue in the bronze-pipeline work pool
-    schedule=({"cron": "30 16 * * 1-5", "timezone": "America/New_York"})  # 4:30 PM ET weekdays
+    schedule=({"cron": "00 16 * * 1-5", "timezone": "America/New_York"})  # 4:30 PM ET weekdays
 )
 
 if __name__ == "__main__":

@@ -1,69 +1,86 @@
 import os
 import duckdb
+from dotenv import load_dotenv
+from prefect import get_run_logger
+
+load_dotenv()
 
 class MakeSilver:
     def __init__(self, db_file=None):
-        self.db_file = db_file or os.getenv("DUCKDB_FILE", "analytics.duckdb")
+        # Ensure storage/silver directory exists
+        silver_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'storage', 'silver')
+        os.makedirs(silver_dir, exist_ok=True)
+        
+        # Set default database file path if not provided
+        if db_file is None:
+            db_file = os.getenv("DUCKDB_FILE", "analytics.db")
+            # Ensure the database file is in the silver directory
+            db_file = os.path.join(silver_dir, os.path.basename(db_file))
+        
+        self.db_file = db_file
         self.con = duckdb.connect(self.db_file)
+        self.intervals = [int(x.strip()) for x in os.getenv("INTERVALS").split(",") if x.strip().isdigit()]
         self._initialize_raw_data()
+        self.logger = self.get_logger()
         
     def _initialize_raw_data(self):
         """Initialize raw data table from PostgreSQL source"""
-        self.con.execute("""
+        self.con.execute(f"""
             CREATE TABLE IF NOT EXISTS raw_data AS
             SELECT * FROM postgres_scan(
-                'host=localhost port=5432 user=… password=… dbname=condvest',
+                'host=localhost port=5432 user={os.getenv("POSTGRES_USER")} password={os.getenv("POSTGRES_PASSWORD")} dbname=condvest',
                 'public', 'raw'
             );
         """)
-    @staticmethod
-    def fibonacci(n):
-        """Generate Fibonacci sequence up to n numbers"""
-        a, b = 1, 1
-        fib = [a]
-        for _ in range(n-1):
-            a, b = b, a + b
-            fib.append(a)
-        return fib[1:]
+        
+    def get_logger(self):
+        return get_run_logger()
+    
     
     def create_silver_table(self, interval):
         """Create a silver table for a specific interval"""
-        table_name = f"silver_{interval}m"
-        self.con.execute(f"DROP TABLE IF EXISTS {table_name}")
+        import time
+        start_time = time.time()
+        
+        self.logger.info(f"Processor: Creating silver table for interval {interval}")
+        table_name = f"silver_{interval}"
+        
+        # Read the SQL template
+        sql_path = os.path.join(os.path.dirname(__file__), 'sql', 'resample_view.sql')
+        with open(sql_path, 'r') as f:
+            sql_template = f.read()
+        
+        # Replace the interval placeholder
+        sql_query = sql_template.format(interval=interval)
+        
+        # Create the table if not exists with empty structure
         self.con.execute(f"""
-            CREATE TABLE {table_name} AS
-            WITH numbered AS (
-            SELECT
-                *,
-                ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date) AS rn
-            FROM raw_data
-            ),
-            grp AS (
-            SELECT
-                *,
-                (rn - 1) / {interval} AS grp_id
-            FROM numbered
-            )
-            SELECT
-                symbol,
-                MIN(date)   AS date,
-                FIRST(open) AS open,
-                MAX(high)   AS high,
-                MIN(low)    AS low,
-                LAST(close) AS close,
-                SUM(volume) AS volume
-            FROM grp
-            GROUP BY symbol, grp_id
+            CREATE TABLE IF NOT EXISTS {table_name} AS 
+            SELECT * FROM ({sql_query})
+            WHERE FALSE
         """)
+        # Insert new data incrementally
+        self.con.execute(f"""
+            INSERT INTO {table_name}
+            SELECT * FROM ({sql_query})
+            WHERE date > (SELECT COALESCE(MAX(date), '1900-01-01') FROM {table_name})
+        """)
+        
+        # Create index
         self.con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_date ON {table_name}(symbol, date DESC)")
-    
-    def generate_all_tables(self, num_intervals=12):
+        
+        end_time = time.time()
+        execution_time = end_time - start_time
+        self.logger.info(f"Processor: Created silver table for interval {interval} in {execution_time:.2f} seconds")
+        
+    def run(self):
         """Generate all silver tables for Fibonacci intervals"""
-        intervals = self.fibonacci(num_intervals)
-        for interval in intervals:
+
+        for interval in self.intervals:
             self.create_silver_table(interval)
 
 # Example usage:
 if __name__ == "__main__":
     generator = MakeSilver()
-    generator.generate_all_tables()
+    generator.run()
+    
