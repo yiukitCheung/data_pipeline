@@ -7,28 +7,33 @@ name: data_pipeline
 prefect-version: 3.4.1
 
 # build section allows you to manage and build docker images
-build: null
+build:
 
 # push section allows you to manage if and how this project is uploaded to remote locations
-push: null
+push:
 
 # pull section allows you to provide instructions for cloning this project in remote locations
-pull: null
+pull:
 
 # the deployments section allows you to provide configuration for deploying flows
 deployments:
 - name: bronze-pipeline
-  version: null
+  version:
   tags: []
-  description: "Main pipeline flow — runs after market close if today is a trading day"
+  description: Main pipeline flow — runs after market close if today is a trading
+    day
   entrypoint: daily_flows/daily_pipeline.py:bronze_pipeline
   parameters: {}
   work_pool:
     name: bronze-pipeline
-    work_queue_name: null
+    work_queue_name:
     job_variables: {}
   schedules:
   - cron: 30 16 * * 1-5
     timezone: America/New_York
     day_or: true
     active: true
+  concurrency_limit:
+  pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /Users/yiukitcheung/Desktop/data_pipeline

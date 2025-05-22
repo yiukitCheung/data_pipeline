@@ -95,16 +95,17 @@ class StockDataIngestor:
         time_since_last_message = current_time - last_message_time
         
         # Add periodic heartbeat logging
-        if time_since_last_message > 1.0:  # Log every 1 seconds of inactivity
+        if (time_since_last_message > 1.0):  # Log every 1 seconds of inactivity
             self.logger.info(f"Ingestor: No new messages for {time_since_last_message:.1f} seconds")
         
         # Stop ingestion if no new messages for a while
-        if self.mode in ["catch_up", "reset"] and time_since_last_message > timeout_seconds:
+        if (self.mode in ["catch_up", "reset"]) and (time_since_last_message > timeout_seconds):
             self.logger.info(f"Ingestor: No new messages for {timeout_seconds} seconds. Stopping ingestion...")
             return True
         
-        if self.market_close and self.mode == "production":
+        if (self.market_close != None) and (self.mode == "production"):
             current_time = datetime.now(pytz.timezone('America/New_York'))
+            self.logger.info(f"Ingestor: Market close time: {self.market_close.time()}, current time: {current_time.time()}")
             if current_time > self.market_close + pd.Timedelta(minutes=3):
                 self.logger.info(f"Ingestor: Market closed at {self.market_close.time()}, current time is {current_time.time()}. Stopping ingestion...")
                 return True

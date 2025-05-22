@@ -24,8 +24,11 @@ from prefect.filesystems import LocalFileSystem
 
 
 @flow(name="bronze-pipeline")
-def bronze_pipeline(settings):
+def bronze_pipeline(settings=None):
     """Main pipeline flow — runs after market close if today is a trading day"""
+    
+    if settings is None:
+        settings = load_setting()
     
     logger = get_run_logger()
     logger.info("✅ Successfully initialized bronze_pipeline flow.")
