@@ -22,18 +22,43 @@ deployments:
   tags: []
   description: Main pipeline flow — runs after market close if today is a trading
     day
-  entrypoint: daily_flows/daily_pipeline.py:bronze_pipeline
-  parameters: {}
+  entrypoint: flows/daily_pipeline.py:bronze_pipeline
+  parameters:
+    settings:
+      mode: development
   work_pool:
     name: bronze-pipeline
-    work_queue_name:
+    work_queue_name: bronze-pipeline
     job_variables: {}
   schedules:
-  - cron: 30 16 * * 1-5
+  - cron: 00 16 * * 1-5
     timezone: America/New_York
     day_or: true
     active: true
+  - cron: 00 16 * * 1-5
+    timezone: America/New_York
+    day_or: true
+    active: true
+  pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /Users/yiukitcheung/Desktop/data_pipeline
   concurrency_limit:
+- name: silver-pipeline-deployment
+  version:
+  tags: []
+  concurrency_limit:
+  description: Silver pipeline for data processing
+  entrypoint: flows/make_silver_pipeline.py:silver_pipeline
+  parameters: {}
+  work_pool:
+    name: silver-pipeline
+    work_queue_name: silver-pipeline
+    job_variables: {}
+  schedules:
+  - cron: 05 16 * * 1-5
+    timezone: America/New_York
+    day_or: true
+    active: true
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
