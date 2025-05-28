@@ -2,9 +2,12 @@
 import yaml
 import os
 
-def load_setting(status = "development"):
+def load_setting(status = None):
     """
-    Loads the Data Pipeline configuration from the data_pipeline_config.yaml file.
+    Loads the Data Pipeline configuration from the settings.yaml file.
+    
+    Args:
+        status: Optional parameter for backward compatibility, no longer used
     
     Returns:
         dict: data_pipeline_config configuration dictionary.
@@ -13,9 +16,8 @@ def load_setting(status = "development"):
     config_path = os.path.join(os.path.dirname(__file__), "settings.yaml")
     
     try:
-        
         with open(config_path, "r") as file:
-            config = yaml.safe_load(file)[status]
+            config = yaml.safe_load(file)
         return config
     
     except FileNotFoundError:
@@ -25,3 +27,7 @@ def load_setting(status = "development"):
     except yaml.YAMLError as e:
         print("Error reading the YAML configuration file.")
         raise e
+    
+if __name__ == "__main__":
+    settings = load_setting()
+    print(settings)
