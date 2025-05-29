@@ -7,6 +7,8 @@ from prefect import get_run_logger
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv  
 from config.load_setting import load_setting
+from pandas_market_calendars import get_calendar
+import mcal
 load_dotenv()
 
 POSTGRES_URL = os.getenv('POSTGRES_URL')
@@ -45,12 +47,17 @@ class StockDataIngestor:
         
         # Trade hours
         if self.mode == "production":
-            result = utils.DateTimeTools.determine_trading_hour('30m')
-            if result:
-                _, _, self.market_close = result
+            # Get market schedule for today
+            nyse = get_calendar('NYSE')
+            today = datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d')
+            schedule = nyse.schedule(start_date=today, end_date=today)
+            
+            if not schedule.empty:
+                self.market_close = schedule.iloc[0]['market_close'].tz_convert('America/New_York')
+                self.logger.info(f"Ingestor: Market close time is {self.market_close}")
             else:
+                self.logger.info("Ingestor: No market schedule for today")
                 self.market_close = None
-                self.logger.info("Ingestor: Not during trading hours")
         else:
             self.market_close = None
         
@@ -105,8 +112,7 @@ class StockDataIngestor:
         
         if (self.market_close != None) and (self.mode == "production"):
             current_time = datetime.now(pytz.timezone('America/New_York'))
-            self.logger.info(f"Ingestor: Market close time: {self.market_close.time()}, current time: {current_time.time()}")
-            if current_time > self.market_close + pd.Timedelta(minutes=3):
+            if current_time > self.market_close + pd.Timedelta(minutes=5):
                 self.logger.info(f"Ingestor: Market closed at {self.market_close.time()}, current time is {current_time.time()}. Stopping ingestion...")
                 return True
             

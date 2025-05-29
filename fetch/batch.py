@@ -14,6 +14,7 @@ import pytz
 import yfinance as yf
 from kafka import KafkaProducer
 from prefect import get_run_logger
+import mcal
 
 # Add parent directory to path for local imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -83,11 +84,16 @@ class BatchDataExtractor:
             
     def _init_production_mode(self):
         """Initialize production mode specific components"""
-        result = utils.DateTimeTools.determine_trading_hour('5m')
-        if result:
-            _, _, self.market_close = result
+        # Get market schedule for today
+        nyse = mcal.get_calendar('NYSE')
+        today = datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d')
+        schedule = nyse.schedule(start_date=today, end_date=today)
+        
+        if not schedule.empty:
+            self.market_close = schedule.iloc[0]['market_close'].tz_convert('America/New_York')
+            self.logger.info(f"BatchDataExtractor: Market close time is {self.market_close}")
         else:
-            self.logger.info("BatchDataExtractor: Not during trading hours")
+            self.logger.info("BatchDataExtractor: No market schedule for today")
             self.market_close = None
             
         self.last_fetch_dict = self.get_last_fetch_dict()
@@ -289,10 +295,13 @@ class BatchDataExtractor:
                 return
             else:
                 current_time = datetime.now(pytz.timezone('America/New_York'))
-                if current_time < self.market_close + pd.Timedelta(minutes=5):
+                if self.market_close and current_time > self.market_close:
                     self.logger.info("BatchExtractor: Market closed, fetching end of day data...")
                     self.fetch_and_produce_batch_data()
                     self.logger.info("BatchExtractor: Trading day complete, exiting...")
+                    return
+                else:
+                    self.logger.info("BatchExtractor: Waiting for market close...")
                     return
                     
         except KeyboardInterrupt:
