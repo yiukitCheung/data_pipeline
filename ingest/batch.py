@@ -8,7 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv  
 from config.load_setting import load_setting
 from pandas_market_calendars import get_calendar
-import mcal
+import pandas_market_calendars as mcal
 load_dotenv()
 
 POSTGRES_URL = os.getenv('POSTGRES_URL')

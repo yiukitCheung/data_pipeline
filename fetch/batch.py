@@ -14,7 +14,7 @@ import pytz
 import yfinance as yf
 from kafka import KafkaProducer
 from prefect import get_run_logger
-import mcal
+import pandas_market_calendars as mcal
 
 # Add parent directory to path for local imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

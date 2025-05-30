@@ -109,10 +109,6 @@ deployments:
     timezone: America/New_York
     day_or: true
     active: true
-  - cron: 00 16 * * 1-5
-    timezone: America/New_York
-    day_or: true
-    active: true
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
