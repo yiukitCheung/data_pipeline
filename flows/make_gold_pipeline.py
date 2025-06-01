@@ -1,0 +1,79 @@
+import polars as pl
+from prefect import flow, task
+from prefect import get_run_logger
+from prefect.tasks import task_input_hash
+from prefect.cache_policies import NO_CACHE
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Load the settings
+from config import load_setting
+settings = load_setting()
+
+from process.core import IndicatorCalculator, TrendAlertProcessor, DataLoader
+from process import VegasChannelStrategy
+
+@flow
+def make_gold() -> pl.DataFrame:
+    """Make gold data from silver data"""
+    # logger = get_run_logger()
+    print("Starting make_gold flow")
+    
+    # Initialize data loader
+    data_loader = DataLoader(settings)
+    
+    try:
+        print("Loading silver data")
+        df = load_silver(data_loader)
+        
+        print("Applying indicators")
+        df = apply_indicators(df)
+        
+        print("Applying alert rules")
+        df = apply_alert_rules(df)
+        
+        print("Applying strategies")
+        df = apply_strategies(df)
+        
+        print("Saving gold data")
+        data_loader.save_gold_data(df)
+        print("Gold data saved")
+        
+        return df
+        
+    finally:
+        data_loader.close()
+
+@task
+def apply_indicators(df: pl.DataFrame) -> pl.DataFrame:
+    """Apply indicators to the data"""
+    indicator_calculator = IndicatorCalculator()
+    df = indicator_calculator.apply(df)
+    return df
+
+@task
+def apply_alert_rules(df: pl.DataFrame) -> pl.DataFrame:
+    """Apply alert rules to the data"""
+    trend_alert_processor = TrendAlertProcessor(df)
+    df = trend_alert_processor.apply()
+    return df
+
+@task
+def apply_strategies(df: pl.DataFrame) -> pl.DataFrame:
+    """Apply strategies to the data"""
+    vegas_channel_strategy = VegasChannelStrategy(df)
+    df = vegas_channel_strategy.process()
+    return df
+
+@task(cache_policy=NO_CACHE)
+def load_silver(data_loader: DataLoader) -> pl.DataFrame:
+    """Load the silver data"""
+    df = data_loader.load_silver_data()
+    return df
+
+if __name__ == "__main__":
+    print(settings)
+    # Run the flow
+    result = make_gold()
+    print("\nPipeline completed successfully!")
+    print(f"Processed {len(result)} rows")

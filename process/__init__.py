@@ -1,3 +1,2 @@
-"""
-This module contains the data processing logic for the silver layer.
-""" 
+from .core import *
+from .strategies.VegasChannel import *
