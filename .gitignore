@@ -1,6 +1,8 @@
 .env 
 .dp
 __pycache__
-storage/silver/resampled.db
-storage/silver/resampled.duckdb
-storage/gold/gold_data.parquet
+process/storage/silver/resampled.duckdb
+process/storage/gold/*.parquet
+*.duckdb
+*.parquet
+*.db
