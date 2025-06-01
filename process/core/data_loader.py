@@ -12,16 +12,17 @@ class DataLoader:
         self.gold_save_path = settings["process"]["gold_save_path"]
         self.con = duckdb.connect(self.db_file)
         self.strategies = settings["process"]["strategies"]
-        self.interval_list = [f"'silver_{str(interval)}'" for interval in self.strategies['vegas_channel']['intervals']]
+        self.interval_list = settings["process"]["strategies"]["vegas_channel"]["intervals"]
         
     def get_silver_tables(self) -> list:
         """Get list of all silver tables"""
         try:
+            print(', '.join(f"'{i}'" for i in [f"silver_{interval}" for interval in self.interval_list]))
             # Convert intervals to strings and join them with quotes
             tables = self.con.execute(f"""
                 SELECT table_name 
                 FROM information_schema.tables 
-                WHERE table_name IN ({', '.join(self.interval_list)})
+                WHERE table_name IN ({', '.join(f"'{i}'" for i in [f"silver_{interval}" for interval in self.interval_list])})
                 ORDER BY table_name
             """).fetchall()
             return [table[0] for table in tables]
@@ -87,7 +88,7 @@ class DataLoader:
                 SELECT * FROM df
             """)
             # Save the pl datafame as parquet file
-            df.write_parquet(f"data/{table_name}.parquet")
+            df.write_parquet(f"{self.gold_save_path}/{table_name}.parquet")
             
             
         except Exception as e:

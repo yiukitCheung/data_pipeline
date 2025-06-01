@@ -74,6 +74,6 @@ def load_silver(data_loader: DataLoader) -> pl.DataFrame:
 if __name__ == "__main__":
     print(settings)
     # Run the flow
-    result = make_gold()
+    result = gold_pipeline()
     print("\nPipeline completed successfully!")
     print(f"Processed {len(result)} rows")

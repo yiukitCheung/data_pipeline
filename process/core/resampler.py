@@ -17,8 +17,8 @@ class Resampler:
         self.db_file = os.path.join(silver_dir, os.path.basename(self.db_file))
             
         self.con = duckdb.connect(self.db_file)
-        self.intervals = [int(x.strip()) for x in settings['process']['new_intervals'].split(",") if x.strip().isdigit()]
-        
+        self.intervals = settings['process']['new_intervals']
+        self.sql_path = settings['process']['sql_path']
         self._initialize_raw_data()
         self.logger = self.get_logger()
         
@@ -45,8 +45,7 @@ class Resampler:
         table_name = f"silver_{interval}"
         
         # Read the SQL template
-        sql_path = os.path.join(os.path.dirname(__file__), 'sql', 'resample_view.sql')
-        with open(sql_path, 'r') as f:
+        with open(self.sql_path, 'r') as f:
             sql_template = f.read()
         
         # Replace the interval placeholder
