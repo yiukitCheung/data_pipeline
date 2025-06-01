@@ -15,6 +15,15 @@ data_extract:
 process:
   silver_db_path: storage/silver/resampled.duckdb
   gold_save_path: storage/gold/gold.duckdb
+  new_intervals:
+    - 1
+    - 3
+    - 5
+    - 8
+    - 13
+    - 21
+    - 34
+    - 55
   strategies:
     - vegas_channel:
       intervals:

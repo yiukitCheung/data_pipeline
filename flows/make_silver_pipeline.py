@@ -1,17 +1,15 @@
 from prefect import flow, task
-from process.utils import *
+from process.core.resampler import Resampler
 
 
 @flow(name="silver-pipeline")
 def silver_pipeline():
-    run_make_silver()
+    resampler()
 
 @task
-def run_make_silver():
-    make_silver = MakeSilver()
+def resampler():
+    make_silver = Resampler()
     make_silver.run()
 
-@task 
-def re 
 if __name__ == "__main__":
     silver_pipeline()
