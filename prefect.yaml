@@ -6,6 +6,9 @@
 name: data_pipeline
 prefect-version: 3.4.1
 
+# Common configurations
+common_working_directory: /Users/yiukitcheung/Desktop/data_pipeline
+
 # build section allows you to manage and build docker images
 build:
 
@@ -35,16 +38,18 @@ deployments:
     active: true
   pull:
   - prefect.deployments.steps.set_working_directory:
-      directory: /Users/yiukitcheung/Desktop/data_pipeline
+      directory: ${common_working_directory}
+
 - name: bronze-pipeline-deployment
   version:
   tags: []
   concurrency_limit:
   description: Main pipeline flow — runs after market close if today is a trading
     day
-  entrypoint: flows/daily_pipeline.py:bronze_pipeline
+  entrypoint: flows/make_bronze_pipeline.py:bronze_pipeline
   parameters:
     settings:
+      mode: production
       data_extract:
         meta:
           topic_names: meta
@@ -99,13 +104,32 @@ deployments:
         trades:
           long_term: long_term_sandbox_results
           short_term: short_term_sandbox_results
-      mode: production
   work_pool:
     name: bronze-pipeline
     work_queue_name:
     job_variables: {}
   schedules:
   - cron: 00 16 * * 1-5
+    timezone: America/New_York
+    day_or: true
+    active: true
+  pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: ${common_working_directory}
+
+- name: gold-pipeline-deployment
+  version:
+  tags: []
+  concurrency_limit:
+  description: Make gold data from silver data
+  entrypoint: flows/make_gold_pipeline.py:gold_pipeline
+  parameters: {}
+  work_pool:
+    name: gold-pipeline
+    work_queue_name:
+    job_variables: {}
+  schedules:
+  - cron: 10 16 * * 1-5
     timezone: America/New_York
     day_or: true
     active: true

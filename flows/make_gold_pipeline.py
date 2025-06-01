@@ -13,8 +13,8 @@ settings = load_setting()
 from process.core import IndicatorCalculator, TrendAlertProcessor, DataLoader
 from process import VegasChannelStrategy
 
-@flow
-def make_gold() -> pl.DataFrame:
+@flow(name="gold-pipeline")
+def gold_pipeline() -> pl.DataFrame:
     """Make gold data from silver data"""
     # logger = get_run_logger()
     print("Starting make_gold flow")
