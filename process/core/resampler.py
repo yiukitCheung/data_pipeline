@@ -6,20 +6,19 @@ from prefect import get_run_logger
 load_dotenv()
 
 class Resampler:
-    def __init__(self, db_file=None):
+    def __init__(self, settings):
         # Ensure storage/silver directory exists
         silver_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'storage', 'silver')
         os.makedirs(silver_dir, exist_ok=True)
         
         # Set default database file path if not provided
-        if db_file is None:
-            db_file = os.getenv("DUCKDB_FILE", "analytics.db")
-            # Ensure the database file is in the silver directory
-            db_file = os.path.join(silver_dir, os.path.basename(db_file))
-        
-        self.db_file = db_file
+        self.db_file = settings['process']['silver_db_path']
+        # Ensure the database file is in the silver directory
+        self.db_file = os.path.join(silver_dir, os.path.basename(self.db_file))
+            
         self.con = duckdb.connect(self.db_file)
-        self.intervals = [int(x.strip()) for x in os.getenv("INTERVALS").split(",") if x.strip().isdigit()]
+        self.intervals = [int(x.strip()) for x in settings['process']['new_intervals'].split(",") if x.strip().isdigit()]
+        
         self._initialize_raw_data()
         self.logger = self.get_logger()
         
@@ -78,9 +77,3 @@ class Resampler:
 
         for interval in self.intervals:
             self.create_silver_table(interval)
-
-# Example usage:
-if __name__ == "__main__":
-    generator = MakeSilver()
-    generator.run()
-    
