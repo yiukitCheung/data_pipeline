@@ -14,7 +14,7 @@ from process.core import IndicatorCalculator, TrendAlertProcessor, DataLoader
 from process import VegasChannelStrategy
 
 @flow(name="gold-pipeline")
-def gold_pipeline() -> pl.DataFrame:
+def gold_pipeline(settings: dict) -> pl.DataFrame:
     """Make gold data from silver data"""
     # logger = get_run_logger()
     print("Starting make_gold flow")
@@ -74,6 +74,6 @@ def load_silver(data_loader: DataLoader) -> pl.DataFrame:
 if __name__ == "__main__":
     print(settings)
     # Run the flow
-    result = gold_pipeline()
+    result = gold_pipeline(settings)
     print("\nPipeline completed successfully!")
     print(f"Processed {len(result)} rows")

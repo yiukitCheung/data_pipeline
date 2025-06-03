@@ -48,10 +48,10 @@ deployments:
   entrypoint: flows/make_bronze_pipeline.py:bronze_pipeline
   parameters:
     settings:
-      data_extract:    
+      data_extract:
         meta:
-          topic_names: "meta"
-          table_name: "symbol_metadata"
+          topic_names: meta
+          table_name: symbol_metadata
           chunk_size: 5000
           batch_size: 5000
         raw:
@@ -65,24 +65,23 @@ deployments:
         gold_save_path: process/storage/gold
         sql_path: process/sql/resample_view.sql
         new_intervals:
-          - 1
-          - 3
-          - 5
-          - 8
-          - 13
-          - 21
-          - 34
-          - 55
+        - 1
+        - 3
+        - 5
+        - 8
+        - 13
+        - 21
+        - 34
+        - 55
         strategies:
           vegas_channel:
             intervals:
-              - 1
-              - 3
-              - 5
-              - 8
-              - 13 
-      mode: "production"
-
+            - 1
+            - 3
+            - 5
+            - 8
+            - 13
+      mode: production
   work_pool:
     name: bronze-pipeline
     work_queue_name:
@@ -95,7 +94,6 @@ deployments:
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
-
 - name: gold-pipeline-deployment
   version:
   tags: []
@@ -104,10 +102,10 @@ deployments:
   entrypoint: flows/make_gold_pipeline.py:gold_pipeline
   parameters:
     settings:
-      data_extract:    
+      data_extract:
         meta:
-          topic_names: "meta"
-          table_name: "symbol_metadata"
+          topic_names: meta
+          table_name: symbol_metadata
           chunk_size: 5000
           batch_size: 5000
         raw:
@@ -121,24 +119,23 @@ deployments:
         gold_save_path: process/storage/gold
         sql_path: process/sql/resample_view.sql
         new_intervals:
-          - 1
-          - 3
-          - 5
-          - 8
-          - 13
-          - 21
-          - 34
-          - 55
+        - 1
+        - 3
+        - 5
+        - 8
+        - 13
+        - 21
+        - 34
+        - 55
         strategies:
           vegas_channel:
             intervals:
-              - 1
-              - 3
-              - 5
-              - 8
-              - 13 
-      mode: "production"
-
+            - 1
+            - 3
+            - 5
+            - 8
+            - 13
+      mode: production
   work_pool:
     name: gold-pipeline
     work_queue_name:
