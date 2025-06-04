@@ -20,16 +20,15 @@ pull:
 
 # the deployments section allows you to provide configuration for deploying flows
 deployments:
-- name: silver-pipeline-deployment
-  version:
+- name: silver-pipeline
+  version: '1'
   tags: []
-  concurrency_limit:
   description: Silver pipeline for data processing
   entrypoint: flows/make_silver_pipeline.py:silver_pipeline
   parameters: {}
   work_pool:
-    name: silver-pipeline
-    work_queue_name: silver-pipeline
+    name: data-pipeline
+    work_queue_name: silver
     job_variables: {}
   schedules:
   - cron: 05 16 * * 1-5
@@ -39,10 +38,10 @@ deployments:
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
-- name: bronze-pipeline-deployment
-  version:
-  tags: []
   concurrency_limit:
+- name: bronze-pipeline
+  version: '1'
+  tags: []
   description: Main pipeline flow — runs after market close if today is a trading
     day
   entrypoint: flows/make_bronze_pipeline.py:bronze_pipeline
@@ -83,8 +82,8 @@ deployments:
             - 13
       mode: production
   work_pool:
-    name: bronze-pipeline
-    work_queue_name:
+    name: data-pipeline
+    work_queue_name: bronze
     job_variables: {}
   schedules:
   - cron: 00 16 * * 1-5
@@ -94,10 +93,10 @@ deployments:
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
-- name: gold-pipeline-deployment
-  version:
-  tags: []
   concurrency_limit:
+- name: gold-pipeline
+  version: '1'
+  tags: []
   description: Make gold data from silver data
   entrypoint: flows/make_gold_pipeline.py:gold_pipeline
   parameters:
@@ -137,8 +136,8 @@ deployments:
             - 13
       mode: production
   work_pool:
-    name: gold-pipeline
-    work_queue_name:
+    name: data-pipeline
+    work_queue_name: gold
     job_variables: {}
   schedules:
   - cron: 10 16 * * 1-5
@@ -148,3 +147,4 @@ deployments:
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
+  concurrency_limit:

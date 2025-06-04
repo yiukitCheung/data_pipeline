@@ -30,8 +30,8 @@ class StockDataIngestor:
         self.mode = settings["mode"]
         
         # Set the topic names
-        self.topic_name = settings["data_extract"]["databatch"]["base_interval"]
-        self.table_name = settings["data_extract"]["databatch"]["table_name"]
+        self.topic_name = '1d'
+        self.table_name = 'raw'
         
         # Initialize the PostgresTools client
         self.postgres_tools = postgres_client.PostgresTools(POSTGRES_URL)

@@ -40,8 +40,8 @@ class BatchDataExtractor:
         # Extract configs
         self.mode = settings['mode']
         self.current_date = pd.to_datetime("today").strftime('%Y-%m-%d')
-        self.topic_names = settings['data_extract']['databatch']['base_interval']
-        self.table_name = settings['data_extract']['databatch']['table_name']
+        self.topic_names = "1d"
+        self.table_name = "raw"
         
         # Initialize core components
         self.timescale_tool = postgres_client.PostgresTools(POSTGRES_URL)
