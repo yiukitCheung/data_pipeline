@@ -13,7 +13,7 @@ data_extract:
 
 process:
   silver_db_path: process/storage/silver/resampled.duckdb
-  gold_save_path: process/storage/gold
+  gold_data_path: process/storage/gold/gold_data.parquet
   sql_path: process/sql/resample_view.sql
   new_intervals:
     - 1
