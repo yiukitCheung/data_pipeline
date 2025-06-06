@@ -41,7 +41,7 @@ class Resampler:
         import time
         start_time = time.time()
         
-        self.logger.info(f"Processor: Creating silver table for interval {interval}")
+        self.logger.info(f"Processor: Processing silver table for interval {interval}")
         table_name = f"silver_{interval}"
         
         # Read the SQL template
@@ -52,11 +52,13 @@ class Resampler:
         sql_query = sql_template.format(interval=interval)
         
         # Create the table if not exists with empty structure
+        self.logger.info(f"Processor: Creating table {table_name}")
         self.con.execute(f"""
             CREATE TABLE IF NOT EXISTS {table_name} AS 
             SELECT * FROM ({sql_query})
             WHERE FALSE
         """)
+        self.logger.info(f"Processor: Inserting new data into {table_name}")
         # Insert new data incrementally
         self.con.execute(f"""
             INSERT INTO {table_name}
@@ -69,7 +71,7 @@ class Resampler:
         
         end_time = time.time()
         execution_time = end_time - start_time
-        self.logger.info(f"Processor: Created silver table for interval {interval} in {execution_time:.2f} seconds")
+        self.logger.info(f"Processor: Processed silver table for interval {interval} in {execution_time:.2f} seconds")
         
     def run(self):
         """Generate all silver tables for Fibonacci intervals"""
