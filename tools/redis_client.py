@@ -2,8 +2,9 @@ from redis import Redis
 from typing import Optional, Any, Union, List
 import os
 from dotenv import load_dotenv
+import json
 
-class RedisClient:
+class RedisTools:
     def __init__(self, redis_url: Optional[str] = None, prefix: str = "cache"):
         """
         Initialize Redis client with optional URL from environment variable.
@@ -77,6 +78,68 @@ class RedisClient:
     def ping(self) -> bool:
         """Test Redis connection"""
         return self.redis.ping()
+
+    # List operations
+    def lpush(self, key: str, *values: Any) -> int:
+        """
+        Push values onto the head of the list
+        
+        Args:
+            key: List key
+            values: Values to push (will be converted to strings)
+        """
+        str_values = [str(v) for v in values]
+        return self.redis.lpush(self._get_key(key), *str_values)
+    
+    def rpush(self, key: str, *values: Any) -> int:
+        """
+        Push values onto the tail of the list
+        
+        Args:
+            key: List key
+            values: Values to push (will be converted to strings)
+        """
+        str_values = [str(v) for v in values]
+        return self.redis.rpush(self._get_key(key), *str_values)
+    
+    def lrange(self, key: str, start: int, end: int) -> List[str]:
+        """
+        Get a range of elements from a list
+        
+        Args:
+            key: List key
+            start: Start index (inclusive)
+            end: End index (inclusive)
+        """
+        return [v.decode() for v in self.redis.lrange(self._get_key(key), start, end)]
+    
+    def llen(self, key: str) -> int:
+        """Get the length of a list"""
+        return self.redis.llen(self._get_key(key))
+    
+    def lindex(self, key: str, index: int) -> Optional[str]:
+        """Get an element from a list by its index"""
+        result = self.redis.lindex(self._get_key(key), index)
+        return result.decode() if result else None
+    
+    def lset(self, key: str, index: int, value: Any) -> None:
+        """Set the value of an element in a list by its index"""
+        self.redis.lset(self._get_key(key), index, str(value))
+    
+    def lrem(self, key: str, count: int, value: Any) -> int:
+        """
+        Remove elements from a list
+        
+        Args:
+            key: List key
+            count: Number of elements to remove (0 for all)
+            value: Value to remove
+        """
+        return self.redis.lrem(self._get_key(key), count, str(value))
+    
+    def ltrim(self, key: str, start: int, end: int) -> None:
+        """Trim a list to the specified range"""
+        self.redis.ltrim(self._get_key(key), start, end)
 
 if __name__ == "__main__":
     # Try with explicit localhost URL first
