@@ -82,14 +82,24 @@ class DataLoader:
     def save_gold_data(self, df: pl.DataFrame, table_name: str = "gold_data"):
         """Save processed data to gold layer"""
         try:
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(self.gold_save_path), exist_ok=True)
+            
+            # Check file size only if it exists
+            if os.path.exists(self.gold_save_path):
+                print(f"Size of file before saving: {os.path.getsize(self.gold_save_path)}")
+            
             # Create or replace the gold table
             self.con.execute(f"""
                 CREATE OR REPLACE TABLE {table_name} AS
                 SELECT * FROM df
             """)
-            # Save the pl datafame as parquet file
-            df.write_parquet(f"{self.gold_save_path}/{table_name}.parquet")
             
+            # Save the pl dataframe as parquet file
+            df.write_parquet(self.gold_save_path)
+            
+            # Show the size of file after saving
+            print(f"Size of file after saving: {os.path.getsize(self.gold_save_path)}")
             
         except Exception as e:
             print(f"Error saving gold data: {str(e)}")

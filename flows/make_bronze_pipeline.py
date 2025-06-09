@@ -64,18 +64,18 @@ def bronze_pipeline(settings=None):
 def reset_mode_pipeline(settings):
     """Reset mode pipeline"""
     try:
-        # Step 1. Run meta extractor and ingestor in parallel
-        meta_ingestor_future = run_meta_ingestor.submit(settings)
-        meta_extractor_future = run_meta_extractor.submit(settings)
+        # # Step 1. Run meta extractor and ingestor in parallel
+        # meta_ingestor_future = run_meta_ingestor.submit(settings)
+        # meta_extractor_future = run_meta_extractor.submit(settings)
         
-        # Wait for both meta tasks to complete
-        meta_extractor_result = meta_extractor_future.result()
-        meta_ingestor_result = meta_ingestor_future.result()
+        # # Wait for both meta tasks to complete
+        # meta_extractor_result = meta_extractor_future.result()
+        # meta_ingestor_result = meta_ingestor_future.result()
         
-        if meta_extractor_future.state.is_failed():
-            raise Exception("Meta extractor failed")
-        if meta_ingestor_future.state.is_failed():
-            raise Exception("Meta ingestor failed")
+        # if meta_extractor_future.state.is_failed():
+        #     raise Exception("Meta extractor failed")
+        # if meta_ingestor_future.state.is_failed():
+        #     raise Exception("Meta ingestor failed")
         
         # Step 2. Run batch extractor and ingestor in parallel
         batch_ingestor_future = run_batch_ingestor.submit(settings)
