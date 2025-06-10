@@ -10,8 +10,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import load_setting
 settings = load_setting()
 
-from process.core import IndicatorCalculator, TrendAlertProcessor, DataLoader
+from process.core import IndicatorCalculator, TrendAlertProcessor, DataLoader, CacheManager
 from process import VegasChannelStrategy
+from tools.redis_client import RedisTools
 
 @flow(name="gold-pipeline")
 def gold_pipeline(settings: dict) -> pl.DataFrame:
@@ -38,6 +39,10 @@ def gold_pipeline(settings: dict) -> pl.DataFrame:
         print("Saving gold data")
         data_loader.save_gold_data(df)
         print("Gold data saved")
+        
+        print("Caching gold data")
+        df = cache_gold(df)
+        print("Gold data cached")
         
         return df
         
@@ -69,6 +74,13 @@ def apply_strategies(df: pl.DataFrame) -> pl.DataFrame:
 def load_silver(data_loader: DataLoader) -> pl.DataFrame:
     """Load the silver data"""
     df = data_loader.load_silver_data()
+    return df
+
+@task(cache_policy=NO_CACHE)
+def cache_gold(df: pl.DataFrame) -> pl.DataFrame:
+    """Cache the gold data"""
+    cache_manager = CacheManager()
+    cache_manager.cache_latest_picks(df)
     return df
 
 if __name__ == "__main__":

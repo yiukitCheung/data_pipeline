@@ -53,14 +53,14 @@ class Resampler:
         
         # Check if the table exists
         exists = self.con.execute(
-        "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name=?)",
-        [table_name]
-        ).fetchone()[0]
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name=?)",
+                [table_name]
+                ).fetchone()[0]
 
         if exists:
             self.logger.info(f"Processor: Table '{table_name}' exists.")
 
-            # Get the last date of the table
+            # Get the la st date of the table
             last_date = self.con.execute(f"SELECT MAX(date) FROM {table_name}").fetchone()[0]
             
             # Get the last date of the new data
@@ -84,10 +84,10 @@ class Resampler:
             self.con.execute(f"""
                 CREATE TABLE IF NOT EXISTS {table_name} AS 
                 SELECT * FROM ({sql_query})
-                WHERE FALSE
             """)
             # Create index
             self.con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_date ON {table_name}(symbol, date DESC)")
+            
             
         end_time = time.time()
         execution_time = end_time - start_time
