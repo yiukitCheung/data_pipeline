@@ -112,7 +112,7 @@ class StockDataIngestor:
         
         if (self.market_close != None) and (self.mode == "production"):
             current_time = datetime.now(pytz.timezone('America/New_York'))
-            if current_time > self.market_close + pd.Timedelta(minutes=5):
+            if current_time > self.market_close + pd.Timedelta(minutes=3):
                 self.logger.info(f"Ingestor: Market closed at {self.market_close.time()}, current time is {current_time.time()}. Stopping ingestion...")
                 return True
             

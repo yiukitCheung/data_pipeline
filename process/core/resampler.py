@@ -60,7 +60,7 @@ class Resampler:
         if exists:
             self.logger.info(f"Processor: Table '{table_name}' exists.")
 
-            # Get the la st date of the table
+            # Get the last date of the table
             last_date = self.con.execute(f"SELECT MAX(date) FROM {table_name}").fetchone()[0]
             
             # Get the last date of the new data
