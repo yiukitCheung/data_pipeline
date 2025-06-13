@@ -19,7 +19,12 @@ class Resampler:
         self.con = duckdb.connect(self.db_file)
         self.intervals = settings['process']['new_intervals']
         self.sql_path = settings['process']['sql_path']
-        self._initialize_raw_data()
+
+        if settings['mode'] == "catch_up":
+            self._initialize_raw_data()
+        else:
+            self._insert_raw_data()
+
         self.logger = self.get_logger()
         
     def _initialize_raw_data(self):
@@ -32,6 +37,20 @@ class Resampler:
             );
         """)
         
+    def _insert_raw_data(self):
+        """Insert raw data into the raw_data table"""
+        # Get the last date from existing raw data
+        last_date = self.con.execute("SELECT max(date) FROM raw_data").fetchone()[0]
+        
+        # Insert only data after the last date
+        self.con.execute(f"""
+            INSERT INTO raw_data 
+            SELECT * FROM postgres_scan(
+                'host=localhost port=5432 user={os.getenv('POSTGRES_USER')} password={os.getenv('POSTGRES_PASSWORD')} dbname=condvest',
+                'public', 'raw'
+            )
+            WHERE date > '{last_date}'
+        """)
     def get_logger(self):
         return get_run_logger()
     
@@ -62,10 +81,10 @@ class Resampler:
 
             # Get the last date of the table
             last_date = self.con.execute(f"SELECT MAX(date) FROM {table_name}").fetchone()[0]
-            
+            self.logger.info(f"Processor: Last date of {table_name} is {last_date}")
             # Get the last date of the new data
             last_date_new_data = self.con.execute(f"SELECT MAX(date) FROM ({sql_query})").fetchone()[0]
-            
+            self.logger.info(f"Processor: Last date of new data is {last_date_new_data}")
             # If the last date of the new data is greater than the last date of the table, insert the new data
             if last_date_new_data > last_date:
                 self.logger.info(f"Processor: Inserting new data into {table_name}")
