@@ -8,3 +8,6 @@ prefect deploy flows/make_gold_pipeline.py:gold_pipeline -n gold-pipeline-deploy
 
 # Start the worker
 prefect worker start -p bronze-pipeline
+
+# Fast deploy 
+prefect deploy -n gold-pipeline
