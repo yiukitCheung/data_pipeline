@@ -47,8 +47,7 @@ class CacheManager:
                 # Store in Redis
                 self.redis.set(
                     f"{strategy_name}",
-                    json.dumps(cache_data),
-                    expire=86400  # Cache for 24 hours
+                    json.dumps(cache_data)
                 )
                 
                 self.logger.info(f"Cache Manager: Successfully cached {symbol} for {strategy_name}")
