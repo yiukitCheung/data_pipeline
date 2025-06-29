@@ -15,7 +15,7 @@ class Resampler:
         self.db_file = settings['process']['silver_db_path']
         # Ensure the database file is in the silver directory
         self.db_file = os.path.join(silver_dir, os.path.basename(self.db_file))
-            
+
         self.con = duckdb.connect(self.db_file)
         self.intervals = settings['process']['new_intervals']
         self.sql_path = settings['process']['sql_path']
@@ -36,7 +36,7 @@ class Resampler:
                 'public', 'raw'
             );
         """)
-        
+    
     def _insert_raw_data(self):
         """Insert raw data into the raw_data table"""
         # Get the last date from existing raw data
@@ -51,9 +51,9 @@ class Resampler:
             )
             WHERE date > '{last_date}'
         """)
+    
     def get_logger(self):
         return get_run_logger()
-    
     
     def process(self, interval):
         """Create a silver table for a specific interval"""
