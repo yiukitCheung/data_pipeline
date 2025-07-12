@@ -31,14 +31,14 @@ deployments:
     work_queue_name: silver
     job_variables: {}
   schedules:
-  - cron: 05 16 * * 1-5
+  - cron: 10 16 * * 1-5
     timezone: America/New_York
     day_or: true
     active: true
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
-  concurrency_limit:
+  concurrency_limit: 1
 - name: bronze-pipeline
   version: '1'
   tags: []
@@ -93,7 +93,7 @@ deployments:
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
-  concurrency_limit:
+  concurrency_limit: 1
 - name: gold-pipeline
   version: '1'
   tags: []
@@ -140,11 +140,11 @@ deployments:
     work_queue_name: gold
     job_variables: {}
   schedules:
-  - cron: 10 16 * * 1-5
+  - cron: 20 16 * * 1-5
     timezone: America/New_York
     day_or: true
     active: true
   pull:
   - prefect.deployments.steps.set_working_directory:
       directory: /Users/yiukitcheung/Desktop/data_pipeline
-  concurrency_limit:
+  concurrency_limit: 1
