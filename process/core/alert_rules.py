@@ -4,12 +4,12 @@ from typing import List
 class TrendAlertProcessor:
     """
     TrendAlertProcessor using Polars for efficient processing of financial time series data.
-    Incorporates advanced trend detection algorithms from the dictionary-based implementation.
+    Incorporates advanced trend detection algorithms from the polars-based implementation.
     """
-    def __init__(self, df: pl.DataFrame):
+    def __init__(self, df: pl.DataFrame, rolling_window: int = 50):
         self.df = df
         self.intervals = self.df["interval"].unique().to_list()
-        self.rolling_window = 50
+        self.rolling_window = rolling_window
     
     def _add_velocity_alert(self, df: pl.DataFrame) -> pl.DataFrame:
         """

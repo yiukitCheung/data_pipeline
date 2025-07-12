@@ -33,12 +33,19 @@ def gold_pipeline(settings: dict) -> pl.DataFrame:
         print("Applying alert rules")
         df = apply_alert_rules(df)
         
+        print("Saving gold data")
+        data_loader.save_gold_data(df, table_name="gold")
+        print("Gold data saved")
+        
         print("Applying strategies")
         df = apply_strategies(df)
-        
+            
         print("Saving gold data")
-        data_loader.save_gold_data(df)
+        data_loader.save_gold_data(df, table_name="gold_picks")
         print("Gold data saved")
+        
+        # Close the data loader
+        data_loader.close()
         
         print("Caching gold data")
         df = cache_gold(df)
@@ -59,7 +66,7 @@ def apply_indicators(df: pl.DataFrame) -> pl.DataFrame:
 @task
 def apply_alert_rules(df: pl.DataFrame) -> pl.DataFrame:
     """Apply alert rules to the data"""
-    trend_alert_processor = TrendAlertProcessor(df)
+    trend_alert_processor = TrendAlertProcessor(df, rolling_window=50)
     df = trend_alert_processor.apply()
     return df
 

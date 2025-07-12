@@ -9,7 +9,7 @@ class DataLoader:
     def __init__(self, settings: dict):
         load_dotenv()
         self.db_file = settings["process"]["silver_db_path"]
-        self.gold_save_path = settings["process"]["gold_save_path"]
+        self.gold_path = settings["process"]["gold_path"]
         self.con = duckdb.connect(self.db_file)
         self.strategies = settings["process"]["strategies"]
         self.interval_list = settings["process"]["strategies"]["vegas_channel"]["intervals"]
@@ -61,17 +61,17 @@ class DataLoader:
             # Combine all queries with UNION ALL
             full_query = " UNION ALL ".join(union_queries)
             
-            # Execute the combined query
-            df = self.con.execute(full_query).pl()
+            # Execute the combined query and convert to polars dataframe
+            df = self.con.execute(full_query).pl()  
             
             # Sort the combined data
             df = df.sort(["symbol", "interval", "date"])
             
             print(f"Loaded {len(df)} rows from {len(silver_tables)} silver tables")
-            print("\nData summary:")
-            print(f"Date range: {df['date'].min()} to {df['date'].max()}")
-            print("\nUnique symbols and intervals:")
-            print(df.group_by(["symbol", "interval"]).count())
+            # print("\nData summary:")
+            # print(f"Date range: {df['date'].min()} to {df['date'].max()}")
+            # print("\nUnique symbols and intervals:")
+            # print(df.group_by(["symbol", "interval"]).count())
             print("Time taken: ", time.time() - start_time)
             return df
             
@@ -79,27 +79,21 @@ class DataLoader:
             print(f"Error loading silver data: {str(e)}")
             raise
             
-    def save_gold_data(self, df: pl.DataFrame, table_name: str = "gold_data"):
+    def save_gold_data(self, df: pl.DataFrame, table_name: str):
         """Save processed data to gold layer"""
         try:
             # Ensure the directory exists
-            os.makedirs(os.path.dirname(self.gold_save_path), exist_ok=True)
+            os.makedirs(os.path.dirname(os.path.join(self.gold_path, f"{table_name}.parquet")), exist_ok=True)
             
             # Check file size only if it exists
-            if os.path.exists(self.gold_save_path):
-                print(f"Size of file before saving: {os.path.getsize(self.gold_save_path)}")
-            
-            # Create or replace the gold table
-            self.con.execute(f"""
-                CREATE OR REPLACE TABLE {table_name} AS
-                SELECT * FROM df
-            """)
+            if os.path.exists(os.path.join(self.gold_path, f"{table_name}.parquet")):
+                print(f"Size of file before saving: {os.path.getsize(os.path.join(self.gold_path, f"{table_name}.parquet"))}")
             
             # Save the pl dataframe as parquet file
-            df.write_parquet(self.gold_save_path)
+            df.write_parquet(os.path.join(self.gold_path, f"{table_name}.parquet"))
             
             # Show the size of file after saving
-            print(f"Size of file after saving: {os.path.getsize(self.gold_save_path)}")
+            print(f"Size of file after saving: {os.path.getsize(os.path.join(self.gold_path, f"{table_name}.parquet"))}")
             
         except Exception as e:
             print(f"Error saving gold data: {str(e)}")
