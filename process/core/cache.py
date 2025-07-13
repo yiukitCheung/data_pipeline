@@ -44,17 +44,9 @@ class CacheManager:
                 elif symbol is not None:
                     symbol = str(symbol)
             
-                # Cache the picks with timestamp
-                cache_data = {
-                    "symbol": symbol,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
-                
-                # Store in Redis
-                self.redis.set(
-                    f"{strategy_name}",
-                    json.dumps(cache_data)
-                )
+                # Clear existing list and add new symbol
+                self.redis.delete(f"{strategy_name}")
+                self.redis.rpush(f"{strategy_name}", symbol)
                 
                 self.logger.info(f"Cache Manager: Successfully cached {symbol} for {strategy_name}")
             return True
@@ -63,7 +55,7 @@ class CacheManager:
             self.logger.error(f"Cache Manager: Error caching picks for {strategy_name}: {str(e)}")
             return False
             
-    def get_cached_picks(self, strategy_name: str) -> Optional[Dict[str, Any]]:
+    def get_cached_picks(self, strategy_name: str) -> Optional[List[str]]:
         """
         Retrieve cached picks for a specific strategy
         
@@ -71,12 +63,12 @@ class CacheManager:
             strategy_name: Name of the strategy (e.g., 'vegas_channel')
             
         Returns:
-            Optional[Dict]: Dictionary containing picks and metadata, or None if not found
+            Optional[List[str]]: List of symbols, or None if not found
         """
         try:
-            cached_data = self.redis.get(f"{strategy_name}")
+            cached_data = self.redis.lrange(f"{strategy_name}", 0, -1)
             if cached_data:
-                return json.loads(cached_data)
+                return cached_data
             return None
             
         except Exception as e:
