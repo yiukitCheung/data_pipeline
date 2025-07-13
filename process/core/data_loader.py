@@ -83,17 +83,17 @@ class DataLoader:
         """Save processed data to gold layer"""
         try:
             # Ensure the directory exists
-            os.makedirs(os.path.dirname(os.path.join(self.gold_path, f"{table_name}.parquet")), exist_ok=True)
+            os.makedirs(os.path.dirname(os.path.join(self.gold_path, f'{table_name}.parquet')), exist_ok=True)
             
             # Check file size only if it exists
-            if os.path.exists(os.path.join(self.gold_path, f"{table_name}.parquet")):
-                print(f"Size of file before saving: {os.path.getsize(os.path.join(self.gold_path, f"{table_name}.parquet"))}")
+            if os.path.exists(os.path.join(self.gold_path, f'{table_name}.parquet')):
+                print(f"Size of file before saving: {os.path.getsize(os.path.join(self.gold_path, f'{table_name}.parquet'))}")
             
             # Save the pl dataframe as parquet file
-            df.write_parquet(os.path.join(self.gold_path, f"{table_name}.parquet"))
+            df.write_parquet(os.path.join(self.gold_path, f'{table_name}.parquet'))
             
             # Show the size of file after saving
-            print(f"Size of file after saving: {os.path.getsize(os.path.join(self.gold_path, f"{table_name}.parquet"))}")
+            print(f"Size of file after saving: {os.path.getsize(os.path.join(self.gold_path, f'{table_name}.parquet'))}")
             
         except Exception as e:
             print(f"Error saving gold data: {str(e)}")

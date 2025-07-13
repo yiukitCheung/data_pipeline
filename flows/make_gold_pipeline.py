@@ -20,7 +20,7 @@ def gold_pipeline(settings: dict) -> pl.DataFrame:
     # logger = get_run_logger()
     print("Starting make_gold flow")
     
-    # Initialize data loader
+    # Initialize data loader `1 `
     data_loader = DataLoader(settings)
     
     try:

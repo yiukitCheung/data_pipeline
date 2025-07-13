@@ -114,5 +114,21 @@ class Resampler:
         
     def run(self):
         """Generate all silver tables for Fibonacci intervals"""
-        for interval in self.intervals:
-            self.process(interval)
+        try:
+            for interval in self.intervals:
+                self.process(interval)
+        finally:
+            # Ensure connection is closed
+            self.close()
+
+    def close(self):
+        """Close the database connection"""
+        if hasattr(self, 'con') and self.con:
+            self.con.close()
+            self.logger.info("Resampler: Database connection closed")
+
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

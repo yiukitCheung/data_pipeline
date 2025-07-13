@@ -37,11 +37,17 @@ class CacheManager:
             # Extract the picks for the strategy
             for strategy_name in strategy_names:
                 symbol = latest_data.select([f"{strategy_name}"]).to_dicts()[0][f"{strategy_name}"]
+                
+                # Convert date object to string if it's a date
+                if hasattr(symbol, 'strftime'):
+                    symbol = symbol.strftime("%Y-%m-%d")
+                elif symbol is not None:
+                    symbol = str(symbol)
             
                 # Cache the picks with timestamp
                 cache_data = {
                     "symbol": symbol,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 
                 # Store in Redis
@@ -119,7 +125,7 @@ class CacheManager:
             strategy_name: Name of the strategy to check
             max_age_hours: Maximum age of cache in hours before considering it invalid
             
-        Returns:
+        Returns:    
             bool: True if cache is valid, False otherwise
         """
         try:
@@ -127,7 +133,7 @@ class CacheManager:
             if not cached_data:
                 return False
                 
-            cache_time = datetime.fromisoformat(cached_data["timestamp"])
+            cache_time = datetime.strptime(cached_data["timestamp"], "%Y-%m-%d %H:%M:%S")
             age_hours = (datetime.now() - cache_time).total_seconds() / 3600
             
             return age_hours <= max_age_hours
