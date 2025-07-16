@@ -41,7 +41,6 @@ class Resampler:
         """Insert raw data into the raw_data table"""
         # Get the last date from existing raw data
         last_date = self.con.execute("SELECT max(date) FROM raw_data").fetchone()[0]
-        
         # Insert only data after the last date
         self.con.execute(f"""
             INSERT INTO raw_data 
@@ -79,23 +78,38 @@ class Resampler:
         if exists:
             self.logger.info(f"Processor: Table '{table_name}' exists.")
 
-            # Get the last date of the table
+            # Get the last date of the silver table
             last_date = self.con.execute(f"SELECT MAX(date) FROM {table_name}").fetchone()[0]
             self.logger.info(f"Processor: Last date of {table_name} is {last_date}")
-            # Get the last date of the new data
-            last_date_new_data = self.con.execute(f"SELECT MAX(date) FROM ({sql_query})").fetchone()[0]
-            self.logger.info(f"Processor: Last date of new data is {last_date_new_data}")
-            # If the last date of the new data is greater than the last date of the table, insert the new data
-            if last_date_new_data > last_date:
-                self.logger.info(f"Processor: Inserting new data into {table_name}")
-                # Insert new data incrementally
-                self.con.execute(f"""
-                    INSERT INTO {table_name}
+            
+            # Check if there's new raw data that needs to be resampled
+            new_raw_data_count = self.con.execute(f"""
+                SELECT COUNT(*) FROM raw_data WHERE date > '{last_date}'
+            """).fetchone()[0]
+            
+            if new_raw_data_count > 0:
+                self.logger.info(f"Processor: Found {new_raw_data_count} new raw records to resample")
+                
+                # Get the resampled data for the new period only
+                incremental_query = f"""
                     SELECT * FROM ({sql_query})
                     WHERE date > '{last_date}'
-                """)
+                """
+                
+                # Check if the incremental query returns data
+                incremental_count = self.con.execute(f"SELECT COUNT(*) FROM ({incremental_query})").fetchone()[0]
+                
+                if incremental_count > 0:
+                    self.logger.info(f"Processor: Inserting {incremental_count} new resampled records into {table_name}")
+                    # Insert new resampled data incrementally
+                    self.con.execute(f"""
+                        INSERT INTO {table_name}
+                        {incremental_query}
+                    """)
+                else:
+                    self.logger.info(f"Processor: No new resampled data to insert into {table_name}")
             else:
-                self.logger.info(f"Processor: No new data to insert into {table_name}")
+                self.logger.info(f"Processor: No new raw data to resample for {table_name}")
         
         else:
             self.logger.info(f"Processor: Table '{table_name}' does not exist.")
@@ -106,7 +120,6 @@ class Resampler:
             """)
             # Create index
             self.con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_date ON {table_name}(symbol, date DESC)")
-            
             
         end_time = time.time()
         execution_time = end_time - start_time
