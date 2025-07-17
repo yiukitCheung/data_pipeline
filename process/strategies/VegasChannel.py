@@ -146,4 +146,4 @@ class VegasChannelStrategy:
             results.append(combined_results)
         
         # Convert results to DataFrame
-        return pl.DataFrame(results)
+        return pl.DataFrame(results).sort(["date"], descending=True)

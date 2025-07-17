@@ -46,9 +46,9 @@ def gold_pipeline(settings: dict) -> pl.DataFrame:
         
         # Close the data loader
         data_loader.close()
-        
+        print(df.head(1))
         print("Caching gold data")
-        # df = cache_gold(df)
+        df = cache_gold(df)
         print("Gold data cached")
         
         return df

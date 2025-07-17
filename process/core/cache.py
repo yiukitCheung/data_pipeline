@@ -32,23 +32,48 @@ class CacheManager:
             strategy_names = pl_df.columns
             
             # Get the last row of the gold data
-            latest_data = pl_df.head(1)
+            latest_data = pl_df.sort(["date"], descending=True).head(1)
+            date = latest_data.select(["date"]).to_dicts()[0]["date"]
             
             # Extract the picks for the strategy
             for strategy_name in strategy_names:
                 symbol = latest_data.select([f"{strategy_name}"]).to_dicts()[0][f"{strategy_name}"]
                 
-                # Convert date object to string if it's a date
-                if hasattr(symbol, 'strftime'):
-                    symbol = symbol.strftime("%Y-%m-%d")
-                elif symbol is not None:
-                    symbol = str(symbol)
-            
                 # Clear existing list and add new symbol
+                self.logger.info(f"Clearing cache for {strategy_name}")
                 self.redis.delete(f"{strategy_name}")
-                self.redis.rpush(f"{strategy_name}", symbol)
+                self.logger.info(f"Caching symbol: {symbol}")
                 
-                self.logger.info(f"Cache Manager: Successfully cached {symbol} for {strategy_name}")
+                # Handle symbol caching
+                if isinstance(symbol, list):
+                    if symbol:  # Only if list is not empty
+                        self.redis.rpush(f"{strategy_name}", *symbol)
+                        self.logger.info(f"Cache Manager: Successfully cached {len(symbol)} symbols for {strategy_name}")
+                elif symbol is not None:
+                    symbol_str = str(symbol)
+                    self.redis.rpush(f"{strategy_name}", symbol_str)
+                    self.logger.info(f"Cache Manager: Successfully cached {symbol_str} for {strategy_name}")
+                else:
+                    self.logger.warning(f"Cache Manager: No symbol found for {strategy_name}")
+
+                # Cache the date - FIX: Convert date to string
+                if isinstance(date, list):
+                    # If date is a list, take the first element
+                    date_value = date[0] if date else None
+                else:
+                    date_value = date
+                    
+                if date_value:
+                    # Convert datetime.date to string
+                    if hasattr(date_value, 'strftime'):
+                        date_str = date_value.strftime("%Y-%m-%d")
+                    else:
+                        date_str = str(date_value)
+                        
+                    self.logger.info(f"Caching date: {date_str}")
+                    self.redis.set("gold_cache:date", date_str)
+                    self.logger.info(f"Cached date: {date_str}")
+                
             return True
             
         except Exception as e:

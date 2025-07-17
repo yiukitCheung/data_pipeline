@@ -56,7 +56,6 @@ class DataLoader:
                         close::DOUBLE as close,
                         volume::BIGINT as volume
                     FROM {table}
-                    ORDER BY symbol, interval, date
                 """)
             
             # Combine all queries with UNION ALL
@@ -64,7 +63,9 @@ class DataLoader:
             
             # Execute the combined query and convert to polars dataframe
             df = self.con.execute(full_query).pl()  
-            
+
+            # Sort the combined data
+            df = df.sort(["symbol", "interval", "date"])
             print(f"Loaded {len(df)} rows from {len(silver_tables)} silver tables")
             # print("\nData summary:")
             # print(f"Date range: {df['date'].min()} to {df['date'].max()}")
