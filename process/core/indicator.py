@@ -44,6 +44,9 @@ class IndicatorCalculator:
         # Remove the temporary group_id column
         df_with_indicators = df_with_indicators.drop("group_id")
         
+        # Sort the dataframe
+        df_with_indicators = df_with_indicators.sort(["symbol", "interval", "date"])
+        
         print(f"Indicator calculation time: {time.time() - start_time:.2f} seconds")
         return df_with_indicators
 

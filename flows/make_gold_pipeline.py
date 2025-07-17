@@ -39,16 +39,16 @@ def gold_pipeline(settings: dict) -> pl.DataFrame:
         
         print("Applying strategies")
         df = apply_strategies(df)
-            
-        print("Saving gold data")
+
+        print("Saving gold picks")
         data_loader.save_gold_data(df, table_name="gold_picks")
-        print("Gold data saved")
+        print("Gold picks saved")
         
         # Close the data loader
         data_loader.close()
         
         print("Caching gold data")
-        df = cache_gold(df)
+        # df = cache_gold(df)
         print("Gold data cached")
         
         return df

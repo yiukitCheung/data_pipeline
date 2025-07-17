@@ -193,7 +193,7 @@ class TrendAlertProcessor:
         
         # Combine all alerts into a single DataFrame
         if all_alerts:
-            return pl.concat(all_alerts)
+            return pl.concat(all_alerts).sort(["symbol", "interval", "date"])
         else:
             # Return empty DataFrame with correct schema if no alerts
             return pl.DataFrame({
