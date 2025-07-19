@@ -9,7 +9,7 @@ class DataLoader:
     def __init__(self, settings: dict):
         load_dotenv()
         self.db_file = settings["process"]["silver_db_path"]
-        self.gold_path = settings["process"]["gold_path"]
+        self.gold_path = settings["process"]["gold"]
         self.con = duckdb.connect(self.db_file)
         self.strategies = settings["process"]["strategies"]
         self.interval_list = settings["process"]["strategies"]["vegas_channel"]["intervals"]
