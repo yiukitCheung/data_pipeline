@@ -115,7 +115,7 @@ deployments:
           max_batch_time: 120
       process:
         silver_db_path: process/storage/silver/resampled.duckdb
-        gold_save_path: process/storage/gold/gold.parquet
+        gold: process/storage/gold/gold.parquet
         sql_path: process/sql/resample_view.sql
         new_intervals:
         - 1
