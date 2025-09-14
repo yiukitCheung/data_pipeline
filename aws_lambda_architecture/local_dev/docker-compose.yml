@@ -1,0 +1,183 @@
+version: '3.8'
+
+services:
+  # TimescaleDB (replaces Aurora Serverless locally)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: condvest-timescale-lambda
+    environment:
+      POSTGRES_DB: condvest
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ../shared/sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d condvest"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis (replaces ElastiCache)
+  redis:
+    image: redis:7-alpine
+    container_name: condvest-redis-lambda
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Kafka (replaces Kinesis Data Streams)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: condvest-zookeeper-lambda
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: condvest-kafka-lambda
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 1  # Short retention for real-time processing
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  # DynamoDB Local (replaces AWS DynamoDB)
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: condvest-dynamodb-lambda
+    ports:
+      - "8000:8000"
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+
+  # LocalStack (AWS services emulator)
+  localstack:
+    image: localstack/localstack:latest
+    container_name: condvest-localstack
+    ports:
+      - "4566:4566"  # LocalStack endpoint
+    environment:
+      - SERVICES=lambda,apigateway,s3,kinesis,kinesis-analytics,cloudformation,iam,sts
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+      - LAMBDA_EXECUTOR=docker-reuse
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - localstack_data:/tmp/localstack
+
+  # API Server (simulates API Gateway + Lambda)
+  api-server:
+    build:
+      context: ..
+      dockerfile: local_dev/Dockerfile.api
+    container_name: condvest-api-lambda
+    ports:
+      - "8080:8080"
+    environment:
+      POSTGRES_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@timescaledb:5432/condvest
+      REDIS_URL: redis://redis:6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      POLYGON_API_KEY: ${POLYGON_API_KEY}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      dynamodb-local:
+        condition: service_started
+      localstack:
+        condition: service_started
+    volumes:
+      - ..:/app
+    env_file:
+      - ../../.env
+
+  # Batch Layer Runner (simulates AWS Batch/Lambda)
+  batch-runner:
+    build:
+      context: ..
+      dockerfile: local_dev/Dockerfile.batch
+    container_name: condvest-batch-lambda
+    environment:
+      POSTGRES_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@timescaledb:5432/condvest
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://localstack:4566
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      POLYGON_API_KEY: ${POLYGON_API_KEY}
+      MODE: local
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+    volumes:
+      - ..:/app
+      - ../logs:/app/logs
+    env_file:
+      - ../../.env
+
+  # Speed Layer Runner (simulates Kinesis Analytics)
+  speed-runner:
+    build:
+      context: ..
+      dockerfile: local_dev/Dockerfile.speed
+    container_name: condvest-speed-lambda
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_URL: redis://redis:6379
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      POLYGON_API_KEY: ${POLYGON_API_KEY}
+    depends_on:
+      kafka:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      dynamodb-local:
+        condition: service_started
+    volumes:
+      - ..:/app
+    env_file:
+      - ../../.env
+
+volumes:
+  timescale_data:
+  redis_data:
+  kafka_data:
+  localstack_data:
+
+networks:
+  default:
+    name: condvest-lambda-network

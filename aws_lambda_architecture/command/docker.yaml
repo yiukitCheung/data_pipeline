@@ -1,0 +1,5 @@
+# connect to the timescaledb container
+docker exec -it learn-timescale psql -U yiukitcheung -d condvest
+
+# down the container
+docker-compose -f minimal-docker-compose.yml down

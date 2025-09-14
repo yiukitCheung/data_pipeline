@@ -1,0 +1,21 @@
+data_pipeline_mvp:
+  real_time:
+    - websocket ingestion
+    - kafka buffering
+    - flink resampler
+    - redis + kafka output
+  batch:
+    - rest fetcher (daily candles)
+    - resampler for 1h, 4h
+    - timescaledb storage
+  storage:
+    - raw_ohlcv_1d
+    - ohlcv_{symbol}_{interval}
+  consumer_interfaces:
+    - signal_engine (reads Redis or Kafka)
+    - frontend (reads Redis)
+    - backtest engine (reads TimescaleDB)
+  symbols:
+    - configurable: top-N (BTC, ETH, SOL, etc.)
+  intervals:
+    - configurable: [15m, 30m, 1h, 4h, 1d]

@@ -1,0 +1,17 @@
+# minimal-docker-compose.yml
+version: '3.8'
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: learn-timescale
+    environment:
+      POSTGRES_DB: condvest
+      POSTGRES_USER: yiukitcheung
+      POSTGRES_PASSWORD: 409219
+    ports:
+      - "5434:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+
+volumes:
+  timescale_data:
