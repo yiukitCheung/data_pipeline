@@ -98,6 +98,3 @@ cd aws_lambda_architecture/ && pytest
 - [AWS Lambda Architecture Guide](aws_lambda_architecture/README.md)
 - [Deployment Guide](docs/deployment.md)
 - [API Documentation](docs/api.md)
-
-## 🤝 Contributing
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
