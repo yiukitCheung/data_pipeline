@@ -1,6 +1,15 @@
 """
 AWS Lambda function for handling Polygon.io WebSocket connections
 Processes real-time tick data and feeds into Kinesis Data Streams
+
+MVP SPEED LAYER ARCHITECTURE:
+WebSocket Handler → Kinesis Streams → Firehose → Aurora Database
+
+FUTURE ENHANCEMENTS (Post-MVP):
+- Kinesis Analytics for real-time OHLCV aggregation  
+- Custom Lambda for indicator processing (consolidation, pivots)
+- SNS for signal distribution
+- Multiple timeframe outputs (5m, 15m, 1h, 4h, etc.)
 """
 
 import json
@@ -194,11 +203,14 @@ async def process_trade_message(
             conditions=trade_data.get('c', [])
         )
         
-        # Send to Kinesis for stream processing
+        # MVP: Direct tick data to Kinesis (Firehose will batch to Aurora)
         await kinesis_client.put_record(
             data=tick.dict(),
             partition_key=tick.symbol
         )
+        
+        # MVP: Basic aggregation in Redis for instant API responses
+        await update_minute_ohlcv_redis(tick, redis_client)
         
         # Update Redis with latest price (for fast lookups)
         await redis_client.set_latest_price(tick.symbol, tick.price)
@@ -224,6 +236,79 @@ async def process_quote_message(
         
     except Exception as e:
         logger.error(f"Error processing quote message: {str(e)}")
+
+
+async def update_minute_ohlcv_redis(tick: TickData, redis_client: RedisClient):
+    """
+    MVP: Simple minute-level OHLCV aggregation in Redis
+    This provides instant API responses while Firehose handles bulk storage
+    
+    FUTURE: Replace with Kinesis Analytics for multiple timeframes
+    """
+    try:
+        # Create minute bucket key (e.g., "ohlcv:AAPL:2025-09-17T10:45:00")
+        minute_timestamp = tick.timestamp.replace(second=0, microsecond=0)
+        redis_key = f"ohlcv:{tick.symbol}:{minute_timestamp.isoformat()}"
+        
+        # Get existing minute data or initialize
+        existing_data = await redis_client.get(redis_key)
+        
+        if existing_data:
+            ohlcv = json.loads(existing_data)
+            # Update existing minute data
+            ohlcv['high'] = max(float(ohlcv['high']), float(tick.price))
+            ohlcv['low'] = min(float(ohlcv['low']), float(tick.price))
+            ohlcv['close'] = float(tick.price)  # Latest price
+            ohlcv['volume'] += tick.volume
+            ohlcv['last_updated'] = tick.timestamp.isoformat()
+        else:
+            # Initialize new minute data
+            ohlcv = {
+                'symbol': tick.symbol,
+                'open': float(tick.price),
+                'high': float(tick.price),
+                'low': float(tick.price),
+                'close': float(tick.price),
+                'volume': tick.volume,
+                'timestamp': minute_timestamp.isoformat(),
+                'interval': '1m',
+                'last_updated': tick.timestamp.isoformat()
+            }
+        
+        # Store back in Redis with 2-hour TTL (MVP: keep recent data only)
+        await redis_client.setex(redis_key, 7200, json.dumps(ohlcv))
+        
+        # Also update "current_minute" key for easy API access
+        current_key = f"current_minute:{tick.symbol}"
+        await redis_client.setex(current_key, 120, json.dumps(ohlcv))
+        
+    except Exception as e:
+        logger.error(f"Error updating minute OHLCV in Redis: {str(e)}")
+
+
+async def placeholder_indicator_processing(tick: TickData, redis_client: RedisClient):
+    """
+    PLACEHOLDER: Future indicator processing
+    
+    POST-MVP ENHANCEMENTS:
+    - Consolidation detection (price range analysis)
+    - Pivot point calculation (support/resistance)
+    - Volume profile analysis
+    - Breakout detection
+    - Trend analysis
+    
+    For now, this is just a placeholder to show where 
+    real-time indicators would be calculated
+    """
+    # FUTURE: Implement consolidation detection
+    # if detect_consolidation(tick.symbol, tick.price):
+    #     await publish_consolidation_signal(tick.symbol, redis_client)
+    
+    # FUTURE: Implement pivot analysis  
+    # if detect_pivot_break(tick.symbol, tick.price):
+    #     await publish_pivot_signal(tick.symbol, redis_client)
+    
+    pass  # MVP: Skip indicator processing
 
 
 def get_default_symbols() -> List[str]:

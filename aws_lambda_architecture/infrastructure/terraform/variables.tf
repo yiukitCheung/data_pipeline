@@ -167,6 +167,40 @@ variable "log_retention_days" {
 }
 
 # ===============================================
+# Speed Layer Configuration (MVP)
+# ===============================================
+
+variable "firehose_buffer_size" {
+  description = "Firehose buffer size in MB"
+  type        = number
+  default     = 128
+}
+
+variable "firehose_buffer_interval" {
+  description = "Firehose buffer interval in seconds"
+  type        = number
+  default     = 300  # 5 minutes
+}
+
+variable "aurora_http_endpoint" {
+  description = "Aurora HTTP endpoint for Firehose delivery (if using direct Aurora)"
+  type        = string
+  default     = ""
+}
+
+variable "aurora_database_name" {
+  description = "Aurora database name for Firehose"
+  type        = string
+  default     = "condvest"
+}
+
+variable "mvp_mode" {
+  description = "Enable MVP mode (simplified architecture)"
+  type        = bool
+  default     = true
+}
+
+# ===============================================
 # Cost Optimization
 # ===============================================
 

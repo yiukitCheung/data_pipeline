@@ -42,7 +42,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             cluster_arn=os.environ['AURORA_CLUSTER_ARN'],
             secret_arn=os.environ['AURORA_SECRET_ARN'],
             database_name=os.environ['DATABASE_NAME']
-        )
+        ) 
         
         # Parse event parameters
         symbols = event.get('symbols', None)  # None means fetch all active symbols

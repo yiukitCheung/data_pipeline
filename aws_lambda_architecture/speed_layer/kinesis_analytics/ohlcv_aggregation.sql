@@ -216,7 +216,7 @@ SELECT
     ROWTIME_TO_TIMESTAMP(ROWTIME) as alert_time
 FROM "price_movements_stream"
 WHERE ABS(price_change_percent) > 1.0  -- Alert on > 1% moves
-  AND previous_price IS NOT NULL;
+AND previous_price IS NOT NULL;
 
 -- ===============================================
 -- Volume Alerts
