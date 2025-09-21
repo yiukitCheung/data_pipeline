@@ -1,0 +1,44 @@
+---
+config:
+  theme: default
+---
+flowchart TD
+  subgraph Source["📡 Data Input"]
+    A1["Polygon REST API (1D OHLCV)"]
+    A2["Polygon WebSocket (Live Tick)"]
+    A3["Frontend: User Strategy Config + Journal Log"]
+  end
+
+  subgraph Batch["⏱️ Batch Layer (Daily Snapshot)"]
+    B1["CloudWatch Event Schedule"]
+    B2["AWS Lambda Function"]
+    B3["Fetch Daily OHLCV from Polygon"]
+    B4["Resample (3D / 1W)"]
+    B5["Write to Aurora PostgreSQL: raw_ohlcv_1d"]
+  end
+
+  subgraph Speed["⚡ Live Signal Layer (AWS)"]
+    C1["WebSocket Client (EC2 / Lambda / Fargate)"]
+    C2["Kinesis Data Streams: ticks.raw"]
+    C3["Kinesis Data Analytics (Flink/SQL): Resample + Strategy"]
+    C4["Emit Signal (buy/sell/wait)"]
+  end
+
+  subgraph Storage["🗃️ Storage & Cache"]
+    D1["Aurora PostgreSQL: users"]
+    D2["Aurora PostgreSQL: strategy_configs"]
+    D3["Aurora PostgreSQL: journal_logs"]
+    D5["ElastiCache Redis: signals:{symbol}:{strategy_id}"]
+    D6["ElastiCache Redis: strategy_cfg:{user_id}"]
+  end
+
+  %% Connections
+  A1 --> B1
+  B1 --> B2 --> B3 --> B4 --> B5
+  B5 --> D1
+
+  A2 --> C1 --> C2 --> C3 --> C4 --> D5
+
+  A3 --> D2
+  A3 --> D3
+  D2 --> D6
