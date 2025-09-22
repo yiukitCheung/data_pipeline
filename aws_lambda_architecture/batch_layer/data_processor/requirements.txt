@@ -1,0 +1,30 @@
+# Aurora Fibonacci Resampler Dependencies
+# Optimized for AWS Batch + Fargate Spot
+
+# Database connectivity
+psycopg2-binary==2.9.7
+boto3==1.34.0
+botocore==1.34.0
+
+# Data processing (lightweight)
+pandas==2.1.3
+numpy==1.24.3
+
+# Date/time handling
+python-dateutil==2.8.2
+pytz==2023.3
+
+# Data validation
+pydantic==2.5.0
+
+# Logging and monitoring
+loguru==0.7.2
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Performance monitoring
+psutil==5.9.6
+
+# AWS SDK extensions
+aioboto3==12.0.0  # For async operations if needed

@@ -106,8 +106,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                     logger.info(f"Inserted {records_inserted} records for batch")
                 else:
                     logger.warning(f"No data returned for batch: {batch_symbols}")
-                    
-            except Exception as e:
+                        `   ```
+            except Exception as e:  
                 logger.error(f"Error processing batch {batch_symbols}: {str(e)}")
                 # Continue with next batch rather than failing entire job
                 continue
@@ -120,8 +120,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         # Store job metadata (optional - for monitoring)
         store_job_metadata(aurora_client, batch_job)
         
-        # Trigger downstream processing (Silver layer)
-        trigger_silver_layer_processing(target_date)
+        # Trigger downstream processing (Silver layer - Fibonacci resampling)
+        trigger_fibonacci_resampling_job(target_date)
         
         logger.info(f"Completed daily OHLCV fetch. Total records: {total_records}")
         
@@ -193,25 +193,34 @@ def store_job_metadata(aurora_client: AuroraClient, batch_job: BatchProcessingJo
         logger.error(f"Error storing job metadata: {str(e)}")
         # Don't fail the main job for metadata storage issues
 
-def trigger_silver_layer_processing(target_date: datetime.date):
+def trigger_fibonacci_resampling_job(target_date: datetime.date):
     """
-    Trigger the Silver layer processing after Bronze layer completion
+    Trigger the Fibonacci resampling job after bronze layer completion
+    Uses AWS Batch for cost-efficient processing
     """
     try:
-        lambda_client = boto3.client('lambda')
+        batch_client = boto3.client('batch')
         
-        # Invoke Silver layer Lambda asynchronously
-        response = lambda_client.invoke(
-            FunctionName=os.environ['SILVER_LAYER_FUNCTION_NAME'],
-            InvocationType='Event',  # Asynchronous
-            Payload=json.dumps({
+        # Submit Fibonacci resampling job to AWS Batch
+        job_name = f"fibonacci-resampling-{target_date.isoformat()}-{int(datetime.utcnow().timestamp())}"
+        
+        response = batch_client.submit_job(
+            jobName=job_name,
+            jobQueue=os.environ['BATCH_JOB_QUEUE'],
+            jobDefinition=os.environ['FIBONACCI_RESAMPLING_JOB_DEFINITION'],
+            parameters={
                 'date': target_date.isoformat(),
-                'triggered_by': 'bronze_layer'
-            })
+                'triggeredBy': 'bronze_layer'
+                # No CLI arguments needed - resampler uses environment variables
+            }
         )
         
-        logger.info(f"Triggered Silver layer processing for {target_date}")
+        job_id = response['jobId']
+        logger.info(f"Triggered Fibonacci resampling job {job_name} (ID: {job_id}) for {target_date}")
+        
+        return job_id
         
     except Exception as e:
-        logger.error(f"Error triggering Silver layer: {str(e)}")
+        logger.error(f"Error triggering Fibonacci resampling job: {str(e)}")
         # Don't fail Bronze layer for Silver layer trigger issues
+        return None
