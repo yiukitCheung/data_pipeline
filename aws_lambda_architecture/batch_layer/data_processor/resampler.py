@@ -114,53 +114,58 @@ class AuroraFibonacciResampler:
         - Leverages Aurora's columnar storage for performance
         """
         
-        # Your exact DuckDB logic, optimized for Aurora PostgreSQL
+        # PostgreSQL-compatible SQL with proper aggregation handling
         # SIMPLIFIED: No date filtering, always process all data
         sql = f"""
-        WITH numbered AS (
+                WITH numbered AS (
+                    SELECT
+                        symbol,
+                        DATE(timestamp) as date,
+                        open as open,
+                        high as high,
+                        low as low,
+                        close as close,
+                        volume,
+                        ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY DATE(timestamp)) AS rn
+                    FROM raw_ohlcv
+                    WHERE interval = '1d'
+                ),
+                grp AS (
+                    SELECT
+                        symbol,
+                        date,
+                        open,
+                        high,
+                        low,
+                        close,
+                        volume,
+                        (rn - 1) / {interval} AS grp_id
+                    FROM numbered
+                ),
+                aggregated AS (
+                    SELECT
+                        symbol,
+                        grp_id,
+                        MIN(date) AS start_date,
+                        MAX(high) AS high,
+                        MIN(low) AS low,
+                        SUM(volume) AS volume,
+                        -- Get first open and last close using arrays (PostgreSQL approach)
+                        (array_agg(open ORDER BY date))[1] AS open,
+                        (array_agg(close ORDER BY date DESC))[1] AS close
+                    FROM grp
+                    GROUP BY symbol, grp_id
+            )
             SELECT
                 symbol,
-                DATE(timestamp_data) as date,
-                open_price as open,
-                high_price as high,
-                low_price as low,
-                close_price as close,
-                volume,
-                ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY DATE(timestamp_data)) AS rn
-            FROM raw_ohlcv
-            WHERE interval_type = '1d'
-        ),
-        grp AS (
-            SELECT
-                symbol,
-                date,
+                start_date AS date,
                 open,
                 high,
                 low,
                 close,
-                volume,
-                (rn - 1) / {interval} AS grp_id
-            FROM numbered
-        )
-        SELECT
-            symbol,
-            MIN(date) AS date,
-            FIRST_VALUE(open) OVER (
-                PARTITION BY symbol, grp_id 
-                ORDER BY date 
-                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-            ) AS open,
-            MAX(high) AS high,
-            MIN(low) AS low,
-            LAST_VALUE(close) OVER (
-                PARTITION BY symbol, grp_id 
-                ORDER BY date 
-                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-            ) AS close,
-            SUM(volume) AS volume
-        FROM grp
-        GROUP BY symbol, grp_id
-        ORDER BY symbol, date
+                volume
+            FROM aggregated
+            ORDER BY symbol, date
         """
         
         return sql
@@ -223,7 +228,7 @@ class AuroraFibonacciResampler:
                 'records_processed': records_count,
                 'execution_time': execution_time,
                 'status': 'success'
-            }
+            } 
             
         except Exception as e:
             logger.error(f"Error processing {interval}d: {str(e)}")

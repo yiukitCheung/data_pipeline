@@ -18,7 +18,7 @@ from redis.exceptions import RedisError, ConnectionError
 logger = logging.getLogger(__name__)
 
 class RedisClient:
-    """·    
+    """
     Redis client for Speed Layer operations
     
     Features:

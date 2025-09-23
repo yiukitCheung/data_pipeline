@@ -61,12 +61,13 @@ aws_lambda_architecture/
 5. **Cost-Optimized**: Estimated ~$300-500/month for MVP scale
 6. **Global Access**: CloudFront distribution for worldwide users
 
-## Getting Started
+## 🚀 Getting Started
 
-1. **Local Development**: Use `docker-compose` for local testing
-2. **Infrastructure**: Deploy AWS resources with Terraform
-3. **Deployment**: Use AWS CDK or Serverless Framework
-4. **Monitoring**: Built-in CloudWatch metrics and alarms
+### Local Development (Layer-by-Layer)
+
+Each layer has its own independent local development environment:
+
+```bash\n# Batch Layer (Daily OHLCV + Fibonacci Resampling)\ncd batch_layer/local_dev\ndocker-compose up -d\n\n# Speed Layer (Real-time WebSocket + Kinesis)\ncd speed_layer/data_fetcher\ndocker-compose up -d\n\n# Serving Layer (API Gateway + Lambda simulation)\ncd serving_layer/local_dev\ndocker-compose up -d\n```\n\n### AWS Deployment (Infrastructure-as-Code)\n\n```bash\n# Deploy each layer independently\ncd batch_layer/infrastructure/terraform && terraform apply\ncd speed_layer/infrastructure/terraform && terraform apply\ncd serving_layer/infrastructure/terraform && terraform apply\n```\n\n### Testing\n\n- **Batch Layer**: Test Fibonacci resampling locally\n- **Speed Layer**: Test real-time data ingestion\n- **Serving Layer**: Test API endpoints at `http://localhost:8000`
 
 ## Environment Variables
 
