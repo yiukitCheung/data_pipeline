@@ -9,7 +9,7 @@ import concurrent.futures
 import threading
 import time
 from curl_cffi import requests
-
+import yfinance as yf
 import sys, os 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools import postgres_client, kafka_client, polygon_client
@@ -35,14 +35,29 @@ class MetaDataExtractor:
         self.topic_names = settings['data_extract']['meta']['topic_names']
         self.table_name = settings['data_extract']['meta']['table_name']
         self.chunk_size = settings['data_extract']['meta']['chunk_size']
-        self.max_workers = settings['data_extract']['meta'].get('max_workers', 10)
+        self.max_workers = settings['data_extract']['meta'].get('max_workers', 3)  # Default to 3 for metadata
+        self.delay_between_requests = settings['data_extract']['meta'].get('delay_between_requests', 1.0)
         
         # Initialize tools
         self.timescale_tool = postgres_client.PostgresTools(POSTGRES_URL)
         self.polygon_tool = polygon_client.PolygonTools(POLYGON_API_KEY)
         self.kafka_tool = kafka_client.KafkaTools()
+        
+        # Initialize enhanced session for Yahoo Finance with better rate limiting
+        self.yf_session = requests.Session(impersonate="chrome")
+        self.yf_session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        })
+        
         self.logger = get_run_logger()
         
+    
         # Find all available symbols from polygon api
         self.symbols = self.polygon_tool.fetch_all_tickers()
         
@@ -72,24 +87,52 @@ class MetaDataExtractor:
                 self.symbol_locks[symbol] = threading.Lock()
 
             with self.symbol_locks[symbol]:
-                try:
-                    # Fetch metadata using the polygon client
-                    meta_data = self.polygon_tool.fetch_meta(ticker=symbol)
-                    
-                    if meta_data:
-                        # Add timestamp to metadata
-                        return meta_data, symbol
-                    else:
-                        self.logger.warning(f"MetaDataExtractor: No metadata returned for {symbol}")
-                        return None, symbol
+                for attempt in range(max_retries):
+                    try:
+                        # Fetch metadata using the polygon client first
+                        meta_data = self.polygon_tool.fetch_meta(ticker=symbol)
                         
-                except Exception as e:
-                    if "Too Many Requests" in str(e):
-                        self.logger.warning(f"Rate limited for {symbol}, waiting 30s")
-                        time.sleep(30)
-                        return None, symbol
-                    self.logger.error(f"MetaDataExtractor: Error fetching metadata for {symbol}: {e}")
-                    return None, symbol
+                        # Add configurable delay before Yahoo Finance requests to avoid rate limiting
+                        time.sleep(self.delay_between_requests)
+                        
+                        # Fetch additional metadata using yfinance client with retry logic
+                        ticker = yf.Ticker(symbol, session=self.yf_session)
+                        
+                        # Get ticker info with timeout and error handling
+                        try:
+                            info = ticker.info
+                            meta_data["marketCap"] = info.get("marketCap", 0) if info else 0
+                            meta_data["sector"] = info.get("sector", None) if info else None
+                            meta_data["industry"] = info.get("industry", None) if info else None
+                        except Exception as yf_error:
+                            self.logger.warning(f"Yahoo Finance error for {symbol}: {str(yf_error)}")
+                            # Fallback values if Yahoo Finance fails
+                            meta_data["marketCap"] = 0
+                            meta_data["sector"] = None
+                            meta_data["industry"] = None
+                        
+                        if meta_data:
+                            # Add timestamp to metadata
+                            return meta_data, symbol
+                        else:
+                            self.logger.warning(f"MetaDataExtractor: No metadata returned for {symbol}")
+                            return None, symbol
+                            
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        if any(rate_limit_indicator in error_msg for rate_limit_indicator in 
+                                ["too many requests", "rate limit", "429", "throttle"]):
+                            wait_time = min(30 * (2 ** attempt), 300)  # Exponential backoff, max 5 minutes
+                            self.logger.warning(f"Rate limited for {symbol} (attempt {attempt + 1}/{max_retries}), waiting {wait_time}s")
+                            time.sleep(wait_time)
+                            
+                            if attempt == max_retries - 1:
+                                self.logger.error(f"Max retries exceeded for {symbol} due to rate limiting")
+                                return None, symbol
+                            continue
+                        else:
+                            self.logger.error(f"MetaDataExtractor: Error fetching metadata for {symbol}: {e}")
+                            return None, symbol
 
         except Exception as e:
             self.logger.error(f"MetaDataExtractor: Error in metadata fetch for {symbol}: {e}")
@@ -109,7 +152,10 @@ class MetaDataExtractor:
                 'locale': meta_data['locale'],
                 'active': meta_data['active'],
                 'primary_exchange': meta_data['primary_exchange'],
-                'type': meta_data['type']
+                'type': meta_data['type'],
+                'marketCap': meta_data['marketCap'],
+                'sector': meta_data['sector'],
+                'industry': meta_data['industry']
             }
             
             # Send to Kafka

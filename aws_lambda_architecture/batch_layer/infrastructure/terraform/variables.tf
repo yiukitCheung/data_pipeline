@@ -32,21 +32,65 @@ variable "private_subnet_ids" {
   default     = []  # Will be looked up via data source
 }
 
-# Aurora Database Configuration
-variable "aurora_cluster_arn" {
-  description = "Aurora cluster ARN for data storage"
-  type        = string
-}
-
-variable "aurora_secret_arn" {
-  description = "Aurora secret ARN for database credentials"
-  type        = string
-}
-
+# Database Configuration (TimescaleDB on RDS PostgreSQL)
 variable "database_name" {
-  description = "Database name in Aurora cluster"
+  description = "Database name for TimescaleDB instance"
   type        = string
   default     = "condvest"
+}
+
+variable "db_username" {
+  description = "Master username for TimescaleDB instance"
+  type        = string
+  default     = "condvest_admin"
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class for cost optimization"
+  type        = string
+  default     = "db.t3.micro"  # $15-20/month vs Aurora's $50-100/month
+}
+
+variable "db_allocated_storage" {
+  description = "Initial allocated storage in GB"
+  type        = number
+  default     = 20  # Start small, auto-scale as needed
+}
+
+variable "db_max_allocated_storage" {
+  description = "Maximum allocated storage in GB (auto-scaling)"
+  type        = number
+  default     = 100  # Scale up to 100GB automatically
+}
+
+variable "backup_retention_days" {
+  description = "Backup retention period in days"
+  type        = number
+  default     = 7  # 1 week retention for cost optimization
+}
+
+variable "enable_performance_insights" {
+  description = "Enable Performance Insights"
+  type        = bool
+  default     = false  # Disable to save cost in dev/staging
+}
+
+variable "monitoring_interval" {
+  description = "Enhanced monitoring interval in seconds"
+  type        = number
+  default     = 0  # Disable enhanced monitoring to save cost
+}
+
+variable "skip_final_snapshot" {
+  description = "Skip final snapshot when deleting (dev/staging only)"
+  type        = bool
+  default     = true  # Set to false in production
+}
+
+variable "enable_deletion_protection" {
+  description = "Enable deletion protection"
+  type        = bool
+  default     = false  # Set to true in production
 }
 
 # Lambda Configuration (Bronze Layer)
@@ -199,4 +243,29 @@ variable "force_new_deployment" {
   description = "Force new deployment when image changes"
   type        = bool
   default     = false
+}
+
+# Missing variables for batch configuration
+variable "log_retention_days" {
+  description = "CloudWatch log retention in days"
+  type        = number
+  default     = 14
+}
+
+variable "enable_cost_monitoring" {
+  description = "Enable cost monitoring alarms"
+  type        = bool
+  default     = true
+}
+
+variable "batch_job_vcpus" {
+  description = "vCPUs for batch job"
+  type        = string
+  default     = "1.0"
+}
+
+variable "batch_job_memory" {
+  description = "Memory for batch job in MB"
+  type        = string
+  default     = "2048"
 }

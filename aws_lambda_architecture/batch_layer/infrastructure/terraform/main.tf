@@ -53,36 +53,16 @@ data "aws_security_group" "aurora" {
   name = "${var.environment}-aurora-security-group"
 }
 
-# ECR Repository for Fibonacci Resampler
-resource "aws_ecr_repository" "fibonacci_resampler" {
-  name                 = "${var.environment}-fibonacci-resampler"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  lifecycle_policy {
-    policy = jsonencode({
-      rules = [
-        {
-          rulePriority = 1
-          description  = "Keep last 10 images"
-          selection = {
-            tagStatus     = "tagged"
-            tagPrefixList = ["v"]
-            countType     = "imageCountMoreThan"
-            countNumber   = 10
-          }
-          action = {
-            type = "expire"
-          }
-        }
-      ]
-    })
-  }
-
-  tags = {
-    Name = "${var.environment}-fibonacci-resampler"
+# Local values for consistent naming and configuration
+locals {
+  name_prefix = "${var.environment}-condvest"
+  vpc_id      = data.aws_vpc.main.id
+  subnet_ids  = data.aws_subnets.private.ids
+  
+  common_tags = {
+    Environment = var.environment
+    Project     = "condvest-batch-layer"
+    ManagedBy   = "terraform"
+    Layer       = "batch"
   }
 }

@@ -1,9 +1,11 @@
 data_extract:    
   meta:
     topic_names: "meta"
-    table_name: "symbol_metadata"
-    chunk_size: 5000
-    batch_size: 5000
+    table_name: "test_symbol_metadata"
+    chunk_size: 100
+    batch_size: 100
+    max_workers: 3  # Reduced for Yahoo Finance rate limiting
+    delay_between_requests: 1.0  # 1 second delay between symbols
   raw:
     rate_limit: 10
     chunk_delay: 10

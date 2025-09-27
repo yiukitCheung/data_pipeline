@@ -1,4 +1,4 @@
-# Dockerfile for Aurora Fibonacci Resampler
+# Dockerfile for Batch Layer Data Pipeline
 # Optimized for AWS Batch + Fargate Spot
 
 FROM python:3.10-slim
@@ -6,7 +6,7 @@ FROM python:3.10-slim
 # Metadata
 LABEL maintainer="condvest-data-team"
 LABEL version="1.0.0"
-LABEL description="Aurora-based Fibonacci OHLCV Resampler (3-34 intervals)"
+LABEL description="Batch Layer Data Pipeline: Resample ohlcv data into fibonacci intervals"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \

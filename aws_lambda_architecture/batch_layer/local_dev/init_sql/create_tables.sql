@@ -1,10 +1,10 @@
 -- Initialize local TimescaleDB for batch layer testing
--- Purpose: Create tables that match AWS Aurora schema
+-- Purpose: Create tables that match AWS Aurora schema, optimized for TimescaleDB with chunking and compression
 
 -- Enable TimescaleDB extension
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
--- Create symbol metadata table
+-- Create symbol metadata table (not a hypertable, just regular table)
 CREATE TABLE IF NOT EXISTS test_symbol_metadata (
     symbol VARCHAR(50) PRIMARY KEY,
     name VARCHAR(255),
@@ -13,10 +13,13 @@ CREATE TABLE IF NOT EXISTS test_symbol_metadata (
     active VARCHAR(100),
     primary_exchange VARCHAR(100),
     type VARCHAR(100),
+	marketCap BIGINT,
+	sector VARCHAR(50),
+	industry VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+);
 
--- Create raw OHLCV table (hypertable for time-series optimization)
+-- Create raw OHLCV table and convert to hypertable with chunk and compression
 CREATE TABLE IF NOT EXISTS test_raw_ohlcv (
     symbol VARCHAR(50) NOT NULL,
     open DECIMAL(10,2) NOT NULL,
@@ -29,10 +32,21 @@ CREATE TABLE IF NOT EXISTS test_raw_ohlcv (
     PRIMARY KEY (symbol, timestamp, interval)
 );
 
--- Convert raw_ohlcv to TimescaleDB hypertable
-SELECT create_hypertable('test_raw_ohlcv', 'timestamp', if_not_exists => TRUE);
+-- Convert to hypertable with 7 day chunk interval (adjust as needed)
+SELECT create_hypertable('test_raw_ohlcv', 'timestamp', if_not_exists => TRUE, chunk_time_interval => INTERVAL '7 days');
 
--- Create Fibonacci resampled tables (silver layer)
+-- Enable compression on raw_ohlcv, compress by symbol and timestamp
+ALTER TABLE test_raw_ohlcv SET (
+    timescaledb.compress,
+    timescaledb.compress_orderby = 'timestamp DESC',
+    timescaledb.compress_segmentby = 'symbol'
+);
+
+-- Set compression policy to compress chunks older than 7 days (adjust as needed)
+SELECT add_compression_policy('test_raw_ohlcv', INTERVAL '7 days');
+
+-- Create Fibonacci resampled tables (silver layer) as hypertables with chunking and compression
+
 CREATE TABLE IF NOT EXISTS test_silver_3d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
@@ -44,6 +58,16 @@ CREATE TABLE IF NOT EXISTS test_silver_3d (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (symbol, date)
 );
+
+SELECT create_hypertable('test_silver_3d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+
+ALTER TABLE test_silver_3d SET (
+    timescaledb.compress,
+    timescaledb.compress_orderby = 'date DESC',
+    timescaledb.compress_segmentby = 'symbol'
+);
+
+SELECT add_compression_policy('test_silver_3d', INTERVAL '7 days');
 
 CREATE TABLE IF NOT EXISTS test_silver_5d (
     symbol VARCHAR(50) NOT NULL,
@@ -57,6 +81,16 @@ CREATE TABLE IF NOT EXISTS test_silver_5d (
     PRIMARY KEY (symbol, date)
 );
 
+SELECT create_hypertable('test_silver_5d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+
+ALTER TABLE test_silver_5d SET (
+    timescaledb.compress,
+    timescaledb.compress_orderby = 'date DESC',
+    timescaledb.compress_segmentby = 'symbol'
+);
+
+SELECT add_compression_policy('test_silver_5d', INTERVAL '7 days');
+
 CREATE TABLE IF NOT EXISTS test_silver_8d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
@@ -68,6 +102,16 @@ CREATE TABLE IF NOT EXISTS test_silver_8d (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (symbol, date)
 );
+
+SELECT create_hypertable('test_silver_8d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+
+ALTER TABLE test_silver_8d SET (
+    timescaledb.compress,
+    timescaledb.compress_orderby = 'date DESC',
+    timescaledb.compress_segmentby = 'symbol'
+);
+
+SELECT add_compression_policy('test_silver_8d', INTERVAL '7 days');
 
 CREATE TABLE IF NOT EXISTS test_silver_13d (
     symbol VARCHAR(50) NOT NULL,
@@ -81,6 +125,16 @@ CREATE TABLE IF NOT EXISTS test_silver_13d (
     PRIMARY KEY (symbol, date)
 );
 
+SELECT create_hypertable('test_silver_13d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+
+ALTER TABLE test_silver_13d SET (
+    timescaledb.compress,
+    timescaledb.compress_orderby = 'date DESC',
+    timescaledb.compress_segmentby = 'symbol'
+);
+
+SELECT add_compression_policy('test_silver_13d', INTERVAL '7 days');
+
 CREATE TABLE IF NOT EXISTS test_silver_21d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
@@ -92,6 +146,16 @@ CREATE TABLE IF NOT EXISTS test_silver_21d (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (symbol, date)
 );
+
+SELECT create_hypertable('test_silver_21d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+
+ALTER TABLE test_silver_21d SET (
+    timescaledb.compress,
+    timescaledb.compress_orderby = 'date DESC',
+    timescaledb.compress_segmentby = 'symbol'
+);
+
+SELECT add_compression_policy('test_silver_21d', INTERVAL '7 days');
 
 CREATE TABLE IF NOT EXISTS test_silver_34d (
     symbol VARCHAR(50) NOT NULL,
@@ -105,13 +169,12 @@ CREATE TABLE IF NOT EXISTS test_silver_34d (
     PRIMARY KEY (symbol, date)
 );
 
--- Create indexes for performance
-CREATE INDEX IF NOT EXISTS idx_raw_ohlcv_symbol_timestamp ON test_raw_ohlcv(symbol, timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_raw_ohlcv_timestamp ON test_raw_ohlcv(timestamp DESC);
+SELECT create_hypertable('test_silver_34d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
 
-CREATE INDEX IF NOT EXISTS idx_silver_3d_symbol_date ON test_silver_3d(symbol, date DESC);
-CREATE INDEX IF NOT EXISTS idx_silver_5d_symbol_date ON test_silver_5d(symbol, date DESC);
-CREATE INDEX IF NOT EXISTS idx_silver_8d_symbol_date ON test_silver_8d(symbol, date DESC);
-CREATE INDEX IF NOT EXISTS idx_silver_13d_symbol_date ON test_silver_13d(symbol, date DESC);
-CREATE INDEX IF NOT EXISTS idx_silver_21d_symbol_date ON test_silver_21d(symbol, date DESC);
-CREATE INDEX IF NOT EXISTS idx_silver_34d_symbol_date ON test_silver_34d(symbol, date DESC);
+ALTER TABLE test_silver_34d SET (
+    timescaledb.compress,
+    timescaledb.compress_orderby = 'date DESC',
+    timescaledb.compress_segmentby = 'symbol'
+);
+
+SELECT add_compression_policy('test_silver_34d', INTERVAL '7 days');

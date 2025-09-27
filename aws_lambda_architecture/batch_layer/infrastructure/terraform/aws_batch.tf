@@ -79,18 +79,18 @@ resource "aws_batch_job_definition" "fibonacci_resampling" {
     
     # Environment variables for Fibonacci resampling (3-34)
     environment = [
-      {
-        name  = "AURORA_CLUSTER_ARN"
-        value = var.aurora_cluster_arn
-      },
-      {
-        name  = "AURORA_SECRET_ARN"
-        value = var.aurora_secret_arn
-      },
-      {
-        name  = "DATABASE_NAME"
-        value = var.database_name
-      },
+        {
+          name  = "DB_SECRET_ARN"
+          value = aws_secretsmanager_secret.timescale_credentials.arn
+        },
+        {
+          name  = "DATABASE_NAME"
+          value = var.database_name
+        },
+        {
+          name  = "DB_HOST"
+          value = aws_db_instance.timescale.address
+        },
       {
         name  = "AWS_REGION"
         value = var.aws_region

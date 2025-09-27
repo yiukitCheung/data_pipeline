@@ -65,3 +65,6 @@ htmlcov/
 
 # Documentation build
 docs/_build/
+
+# Polygon Data
+polygon_data/

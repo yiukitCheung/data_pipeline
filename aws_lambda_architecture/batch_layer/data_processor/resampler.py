@@ -1,9 +1,9 @@
 """
-Optimized OHLCV Resampler for Aurora PostgreSQL
-Purpose: High-performance resampling using Aurora's analytical capabilities
+Optimized OHLCV Resampler for RDS PostgreSQL + TimescaleDB
+Purpose: High-performance resampling using TimescaleDB's time-series capabilities
 
-Inspired by your DuckDB implementation but optimized for Aurora PostgreSQL.
-Uses your proven ROW_NUMBER windowing approach for Fibonacci intervals 3-34.
+Cost-efficient alternative to Aurora, optimized for Fibonacci intervals 3-34.
+Uses your proven ROW_NUMBER windowing approach from DuckDB implementation.
 """
 
 import os
@@ -12,11 +12,10 @@ import logging
 import time
 from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional
-# Removed argparse - not needed for automated AWS Batch execution
 
 # Add shared utilities
 sys.path.append('/opt/python')
-from shared.clients.aurora_client import AuroraClient
+from shared.clients.rds_timescale_client import RDSTimescaleClient
 from shared.utils.market_calendar import get_previous_trading_day
 
 # Configure logging
@@ -26,14 +25,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class AuroraFibonacciResampler:
+class RDSTimescaleFibonacciResampler:
     """
-    High-performance OHLCV resampling using Aurora PostgreSQL
+    High-performance OHLCV resampling using RDS PostgreSQL + TimescaleDB
     
-    Mimics your DuckDB implementation but leverages Aurora's:
-    - Columnar storage (Aurora I/O optimized)
+    Mimics your DuckDB implementation but leverages TimescaleDB's:
+    - Hypertables for automatic partitioning
+    - Columnar compression
     - Parallel query execution  
-    - Window functions
+    - Time-series optimized indexes
     - Your proven ROW_NUMBER approach
     """
     
@@ -41,17 +41,27 @@ class AuroraFibonacciResampler:
     FIBONACCI_INTERVALS = [3, 5, 8, 13, 21, 34]
     
     def __init__(self):
-        self.aurora_client = AuroraClient(
-            cluster_arn=os.environ['AURORA_CLUSTER_ARN'],
-            secret_arn=os.environ['AURORA_SECRET_ARN'],
-            database_name=os.environ['DATABASE_NAME']
-        )
-        logger.info("Aurora Fibonacci Resampler initialized")
+        """Initialize with RDS TimescaleDB connection"""
+        # Use AWS Secrets Manager for credentials
+        secret_arn = os.environ.get('RDS_SECRET_ARN')
+        
+        if secret_arn:
+            self.db_client = RDSTimescaleClient(secret_arn=secret_arn)
+        else:
+            # Fallback to environment variables
+            self.db_client = RDSTimescaleClient(
+                endpoint=os.environ['RDS_ENDPOINT'],
+                username=os.environ['RDS_USERNAME'],
+                password=os.environ['RDS_PASSWORD'],
+                database=os.environ['RDS_DATABASE']
+            )
+        
+        logger.info("RDS TimescaleDB Fibonacci Resampler initialized")
         
     def get_symbols_to_process(self) -> List[str]:
         """Get all active symbols from symbol metadata"""
         try:
-            symbols = self.aurora_client.get_active_symbols()
+            symbols = self.db_client.get_active_symbols()
             logger.info(f"Found {len(symbols)} active symbols to process")
             return symbols
         except Exception as e:
@@ -59,120 +69,119 @@ class AuroraFibonacciResampler:
             raise
     
     def create_silver_table_if_not_exists(self, interval: int):
-        """Create silver table for specific interval if it doesn't exist"""
+        """Create TimescaleDB-optimized silver table for specific interval"""
         table_name = f"silver_{interval}d"
         
         create_table_sql = f"""
+        -- Create the table if it doesn't exist
         CREATE TABLE IF NOT EXISTS {table_name} (
-            symbol VARCHAR(10) NOT NULL,
-            date DATE NOT NULL,
-            open DECIMAL(10,2) NOT NULL,
-            high DECIMAL(10,2) NOT NULL,
-            low DECIMAL(10,2) NOT NULL,
-            close DECIMAL(10,2) NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL,
+            symbol VARCHAR(50) NOT NULL,
+            open_price DECIMAL(12,4) NOT NULL,
+            high_price DECIMAL(12,4) NOT NULL,
+            low_price DECIMAL(12,4) NOT NULL,
+            close_price DECIMAL(12,4) NOT NULL,
             volume BIGINT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (symbol, date)
+            interval_days INTEGER DEFAULT {interval},
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (timestamp, symbol)
         );
         
-        -- Performance indexes (matching your speed layer approach)
-        CREATE INDEX IF NOT EXISTS idx_{table_name}_date ON {table_name}(date DESC);
-        CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_date ON {table_name}(symbol, date DESC);
+        -- Convert to TimescaleDB hypertable (if not already)
+        SELECT create_hypertable('{table_name}', 'timestamp', if_not_exists => TRUE);
+        
+        -- Performance indexes (TimescaleDB optimized)
+        CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_timestamp ON {table_name}(symbol, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_{table_name}_timestamp ON {table_name}(timestamp DESC);
+        
+        -- Enable compression for cost efficiency
+        ALTER TABLE {table_name} SET (
+            timescaledb.compress,
+            timescaledb.compress_segmentby = 'symbol',
+            timescaledb.compress_orderby = 'timestamp DESC'
+        );
+        
+        -- Add compression policy (compress data older than 7 days)
+        SELECT add_compression_policy('{table_name}', INTERVAL '7 days');
         """
         
         try:
-            self.aurora_client.execute_query(create_table_sql)
-            logger.info(f"Table {table_name} created/verified")
+            self.db_client.execute_query(create_table_sql)
+            logger.info(f"TimescaleDB table {table_name} created/verified with hypertable optimization")
         except Exception as e:
             logger.error(f"Error creating table {table_name}: {str(e)}")
             raise
-    
-    def get_last_processed_date(self, interval: int) -> Optional[date]:
-        """Get the last processed date for a specific interval (for incremental processing)"""
-        table_name = f"silver_{interval}d"
-        
-        try:
-            query = f"SELECT MAX(date) FROM {table_name}"
-            result = self.aurora_client.execute_query(query)
-            
-            if result and result[0][0]:
-                return result[0][0]
-            return None
-            
-        except Exception as e:
-            logger.debug(f"Table {table_name} might not exist yet: {str(e)}")
-            return None
     
     def get_fibonacci_resampling_sql(self, interval: int) -> str:
         """
         Generate high-performance resampling SQL using your proven DuckDB approach
         
         SIMPLIFIED: Always does full resampling (no incremental complexity)
-        This SQL directly mimics your DuckDB logic:
+        This SQL directly mimics your DuckDB logic but optimized for TimescaleDB:
         - Uses ROW_NUMBER() for grouping (exactly like your implementation)
-        - Uses FIRST_VALUE/LAST_VALUE for open/close (Aurora equivalent of FIRST/LAST)
-        - Leverages Aurora's columnar storage for performance
+        - Uses array_agg() for open/close (PostgreSQL equivalent of FIRST/LAST)
+        - Leverages TimescaleDB's time-series optimizations
         """
         
-        # PostgreSQL-compatible SQL with proper aggregation handling
-        # SIMPLIFIED: No date filtering, always process all data
+        # PostgreSQL + TimescaleDB compatible SQL with proper aggregation handling
         sql = f"""
-                WITH numbered AS (
-                    SELECT
-                        symbol,
-                        DATE(timestamp) as date,
-                        open as open,
-                        high as high,
-                        low as low,
-                        close as close,
-                        volume,
-                        ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY DATE(timestamp)) AS rn
-                    FROM raw_ohlcv
-                    WHERE interval = '1d'
-                ),
-                grp AS (
-                    SELECT
-                        symbol,
-                        date,
-                        open,
-                        high,
-                        low,
-                        close,
-                        volume,
-                        (rn - 1) / {interval} AS grp_id
-                    FROM numbered
-                ),
-                aggregated AS (
-                    SELECT
-                        symbol,
-                        grp_id,
-                        MIN(date) AS start_date,
-                        MAX(high) AS high,
-                        MIN(low) AS low,
-                        SUM(volume) AS volume,
-                        -- Get first open and last close using arrays (PostgreSQL approach)
-                        (array_agg(open ORDER BY date))[1] AS open,
-                        (array_agg(close ORDER BY date DESC))[1] AS close
-                    FROM grp
-                    GROUP BY symbol, grp_id
-            )
+        WITH numbered AS (
             SELECT
                 symbol,
-                start_date AS date,
+                DATE(timestamp) as date,
+                open_price as open,
+                high_price as high,
+                low_price as low,
+                close_price as close,
+                volume,
+                ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY DATE(timestamp)) AS rn
+            FROM raw_ohlcv
+            WHERE interval_type = '1d'
+        ),
+        grp AS (
+            SELECT
+                symbol,
+                date,
                 open,
                 high,
                 low,
                 close,
-                volume
-            FROM aggregated
-            ORDER BY symbol, date
+                volume,
+                (rn - 1) / {interval} AS grp_id
+            FROM numbered
+        ),
+        aggregated AS (
+            SELECT
+                symbol,
+                grp_id,
+                MIN(date) AS start_date,
+                MAX(high) AS high,
+                MIN(low) AS low,
+                SUM(volume) AS volume,
+                -- PostgreSQL approach: use array_agg with ordering
+                (array_agg(open ORDER BY date))[1] AS open,
+                (array_agg(close ORDER BY date DESC))[1] AS close
+            FROM grp
+            GROUP BY symbol, grp_id
+            HAVING COUNT(*) = {interval}  -- Only complete intervals
+        )
+        SELECT
+            symbol,
+            start_date AS date,
+            open,
+            high,
+            low,
+            close,
+            volume
+        FROM aggregated
+        ORDER BY symbol, date
         """
         
         return sql
     
     def process_interval(self, interval: int) -> Dict[str, any]:
         """
-        Process a single Fibonacci interval with high performance
+        Process a single Fibonacci interval with TimescaleDB optimization
         
         SIMPLIFIED: Always does full resampling (no incremental complexity)
         
@@ -191,10 +200,10 @@ class AuroraFibonacciResampler:
         resampling_sql = self.get_fibonacci_resampling_sql(interval)
         
         # Count how many records we'll process
-        count_query = f"SELECT COUNT(*) FROM ({resampling_sql}) AS resampled_data"
+        count_query = f"SELECT COUNT(*) as count FROM ({resampling_sql}) AS resampled_data"
         try:
-            count_result = self.aurora_client.execute_query(count_query)
-            records_count = count_result[0][0] if count_result else 0
+            count_result = self.db_client.execute_query(count_query)
+            records_count = count_result[0]['count'] if count_result else 0
             
             logger.info(f"Will process {records_count} records for {interval}d")
             
@@ -207,16 +216,16 @@ class AuroraFibonacciResampler:
         clear_sql = f"DELETE FROM {table_name}"
         
         insert_sql = f"""
-        INSERT INTO {table_name} (symbol, date, open, high, low, close, volume)
+        INSERT INTO {table_name} (timestamp, symbol, open_price, high_price, low_price, close_price, volume)
         {resampling_sql}
         """
         
         try:
             # Clear existing data
-            self.aurora_client.execute_query(clear_sql)
+            self.db_client.execute_query(clear_sql)
             
             # Insert fresh resampled data
-            self.aurora_client.execute_query(insert_sql)
+            self.db_client.execute_query(insert_sql)
             
             end_time = time.time()
             execution_time = end_time - start_time
@@ -244,7 +253,7 @@ class AuroraFibonacciResampler:
             intervals: Optional list of intervals to process (default: 3-34 Fibonacci)
         """
         start_time = time.time()
-        logger.info("Starting Aurora-based Fibonacci resampling job (3-34) - FULL RESAMPLING")
+        logger.info("Starting RDS TimescaleDB Fibonacci resampling job (3-34) - FULL RESAMPLING")
         
         # Use Fibonacci intervals 3-34 if not specified
         if intervals is None:
@@ -287,40 +296,48 @@ class AuroraFibonacciResampler:
         return total_stats
     
     def optimize_tables(self):
-        """Run VACUUM and ANALYZE on silver tables for performance"""
-        logger.info("Optimizing silver tables...")
+        """Run VACUUM and ANALYZE on silver tables for TimescaleDB performance"""
+        logger.info("Optimizing TimescaleDB silver tables...")
         
         for interval in self.FIBONACCI_INTERVALS:
             table_name = f"silver_{interval}d"
             try:
                 # ANALYZE for query planner statistics
-                self.aurora_client.execute_query(f"ANALYZE {table_name}")
-                logger.debug(f"Analyzed table {table_name}")
+                self.db_client.execute_query(f"ANALYZE {table_name}")
+                
+                # TimescaleDB specific optimization
+                self.db_client.execute_query(f"SELECT compress_chunk(i) FROM show_chunks('{table_name}') i")
+                
+                logger.debug(f"Optimized TimescaleDB table {table_name}")
             except Exception as e:
-                logger.warning(f"Could not analyze table {table_name}: {str(e)}")
+                logger.warning(f"Could not optimize table {table_name}: {str(e)}")
         
-        logger.info("Table optimization completed")
+        logger.info("TimescaleDB table optimization completed")
     
     def get_performance_stats(self) -> Dict[str, any]:
-        """Get performance statistics for monitoring"""
+        """Get TimescaleDB performance statistics for monitoring"""
         stats = {}
         
         for interval in self.FIBONACCI_INTERVALS:
             table_name = f"silver_{interval}d"
             try:
-                # Get table size and row count
+                # Get TimescaleDB specific statistics
                 size_query = f"""
                 SELECT 
                     COUNT(*) as row_count,
-                    pg_size_pretty(pg_total_relation_size('{table_name}')) as table_size
+                    pg_size_pretty(pg_total_relation_size('{table_name}')) as table_size,
+                    (SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name = '{table_name}') as chunk_count,
+                    (SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name = '{table_name}' AND is_compressed = true) as compressed_chunks
                 FROM {table_name}
                 """
-                result = self.aurora_client.execute_query(size_query)
+                result = self.db_client.execute_query(size_query)
                 
                 if result:
                     stats[f"{interval}d"] = {
-                        'row_count': result[0][0],
-                        'table_size': result[0][1]
+                        'row_count': result[0]['row_count'],
+                        'table_size': result[0]['table_size'],
+                        'chunk_count': result[0]['chunk_count'],
+                        'compressed_chunks': result[0]['compressed_chunks']
                     }
                     
             except Exception as e:
@@ -329,10 +346,10 @@ class AuroraFibonacciResampler:
         return stats
     
     def close(self):
-        """Close Aurora connection"""
-        if hasattr(self.aurora_client, 'close'):
-            self.aurora_client.close()
-        logger.info("Aurora connection closed")
+        """Close RDS TimescaleDB connection"""
+        if hasattr(self.db_client, 'close'):
+            self.db_client.close()
+        logger.info("RDS TimescaleDB connection closed")
 
 def main():
     """
@@ -343,8 +360,8 @@ def main():
     """
     
     try:
-        logger.info("Starting automated AWS Batch Fibonacci resampling job")
-        resampler = AuroraFibonacciResampler()
+        logger.info("Starting automated AWS Batch Fibonacci resampling job (RDS TimescaleDB)")
+        resampler = RDSTimescaleFibonacciResampler()
         
         # Get intervals from environment variable (set by Terraform)
         intervals_env = os.environ.get('FIBONACCI_INTERVALS', '3,5,8,13,21,34')
@@ -360,7 +377,7 @@ def main():
         
         # Log final statistics
         logger.info("="*60)
-        logger.info("AWS BATCH FIBONACCI RESAMPLING JOB SUMMARY")
+        logger.info("AWS BATCH FIBONACCI RESAMPLING JOB SUMMARY (RDS TimescaleDB)")
         logger.info("="*60)
         logger.info(f"Intervals Processed: {job_stats['intervals_processed']}")
         logger.info(f"Total Records: {job_stats['total_records']}")

@@ -5,15 +5,22 @@ Adapted from the existing Prefect Medallion implementation
 
 import requests
 import logging
-import os
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 from polygon import RESTClient
 from decimal import Decimal
+import boto3
+import re
+from botocore.client import Config
+from concurrent import futures
+import os
+from dotenv import load_dotenv
 
 from ..models.data_models import OHLCVData
 
 logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 
 class PolygonClient:
@@ -264,3 +271,104 @@ class PolygonClient:
             current_date -= timedelta(days=1)
         
         return current_date
+
+class PolygonAWS_S3Client:
+    def __init__(self, aws_access_key_id, aws_secret_access_key, endpoint_url, bucket_name, local_path, max_workers=4):
+        self.session = boto3.Session(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+        )
+        self.s3 = self.session.client(
+            's3',
+            endpoint_url=endpoint_url,
+            config=Config(signature_version='s3v4'),
+        )
+        self.paginator = self.s3.get_paginator('list_objects_v2')
+        self.bucket_name = bucket_name
+        self.local_path = local_path
+        self.max_workers = max_workers
+        self.regexp = re.compile(
+            r'us_stocks_sip/(day_aggs|minute_aggs|trades|quote)_v1/(20[2-3]\d)/(0[1-9]|1[0-2])/(20[2-3]\d)-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01]).csv.gz'
+        )
+
+    def fetch(self, object_key, local_file_path):
+        try:
+            self.s3.download_file(self.bucket_name, object_key, local_file_path)
+            return True
+        except Exception as e:
+            return str(e)
+
+    def _list_objects(self, prefix):
+        objects = []
+        for page in self.paginator.paginate(Bucket=self.bucket_name, Prefix=prefix):
+            objects.extend(page.get('Contents', []))
+        return objects
+
+    def _validate_object(self, object_key, data_type, obj_size):
+        if not self.regexp.fullmatch(object_key):
+            return False
+        local_file_name = object_key.split('/')[-1]
+        local_file_path = f'{self.local_path}/{data_type}/{local_file_name}'
+        if os.path.exists(local_file_path):
+            if obj_size == os.path.getsize(local_file_path):
+                return False
+            else:
+                print(f"Size mismatch for {local_file_name}: {obj_size} <> {os.path.getsize(local_file_path)}")
+        local_file_path = f'{self.local_path}/{data_type}-imported/{local_file_name}'
+        if os.path.exists(local_file_path):
+            if obj_size == os.path.getsize(local_file_path):
+                return False
+            else:
+                print(f"Size mismatch for {local_file_name}: {obj_size} <> {os.path.getsize(local_file_path)}")
+        return True
+
+    def check_new_files(self, data_type):
+        now = datetime.now()
+        first_day_of_current_month = datetime(now.year, now.month, 1)
+        last_day_of_previous_month = first_day_of_current_month - timedelta(days=1)
+        previous_month_str = last_day_of_previous_month.strftime("%Y/%m")
+        current_month_str = now.strftime("%Y/%m")
+        prefixes = [
+            f'us_stocks_sip/{data_type}_aggs_v1/{previous_month_str}',
+            f'us_stocks_sip/{data_type}_aggs_v1/{current_month_str}'
+        ]
+        objects = []
+        for prefix in prefixes:
+            objects.extend(self._list_objects(prefix))
+        new_files = [obj for obj in objects if self._validate_object(obj['Key'], data_type, obj['Size'])]
+        return new_files
+
+    def dl(self, data_type):
+        new_files = self.check_new_files(data_type)
+        works = [(obj['Key'], f'{self.local_path}/{data_type}/{obj["Key"].split("/")[-1]}')
+                for obj in new_files]
+
+        with futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_key = {executor.submit(self.fetch, key[0], key[1]): key for key in works}
+
+            for future in futures.as_completed(future_to_key):
+                key = future_to_key[future]
+                result = future.result()
+                yield key, result
+
+if __name__ == "__main__":
+    client = PolygonAWS_S3Client(
+        aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+        aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+        endpoint_url=os.environ['AWS_ENDPOINT_URL'],
+        bucket_name=os.environ['AWS_BUCKET_NAME'],
+        local_path=os.environ['LOCAL_PATH']
+    )
+    # Download daily aggregates (OHLCV data)
+    for key, result in client.dl('day'):
+        if result is True:
+            print(f"✅ Downloaded: {key[0]}")
+        else:
+            print(f"❌ Error downloading {key[0]}: {result}")
+
+    # Download minute aggregates
+    for key, result in client.dl('minute'):
+        if result is True:
+            print(f"✅ Downloaded: {key[0]}")
+        else:
+            print(f"❌ Error downloading {key[0]}: {result}")

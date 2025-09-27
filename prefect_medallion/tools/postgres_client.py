@@ -12,8 +12,8 @@ import traceback
 class PostgresTools:
     def __init__(self, postgres_url):
         self.postgres_url = postgres_url
-        self.raw_table_name = "raw_ohlcv"
-        self.meta_table_name = "symbol_metadata"
+        self.raw_table_name = "test_raw_ohlcv"
+        self.meta_table_name = "test_symbol_metadata"
     
         # self.engine = create_engine(postgres_url) 
         
@@ -233,7 +233,7 @@ class PostgresTools:
         try:
             conn = psycopg2.connect(self.postgres_url)
             cursor = conn.cursor()
-            cursor.execute(f"SELECT COUNT(symbol) FROM symbol_metadata")
+            cursor.execute(f"SELECT COUNT(symbol) FROM test_symbol_metadata")
             return cursor.fetchone()[0]
         except Exception as e:
             logging.error(f"PostgresTools: Error fetching symbol count: {e}")
@@ -246,7 +246,7 @@ class PostgresTools:
         try:
             conn = psycopg2.connect(self.postgres_url)
             cursor = conn.cursor()
-            cursor.execute(f"SELECT type, parameters, description, indicator_id FROM indicator_definitions")
+            cursor.execute(f"SELECT type, parameters, description, indicator_id FROM test_indicator_definitions")
             return pd.DataFrame(cursor.fetchall(), columns=['type', 'params', 'description', 'indicator_id'])
         except Exception as e:
             logging.error(f"PostgresTools: Error fetching indicator set: {e}")
@@ -329,7 +329,10 @@ class PostgresTools:
                             record.get('locale'),
                             record.get('active'),
                             record.get('primary_exchange'),
-                            record.get('type')
+                            record.get('type'),
+                            record.get('marketCap'),
+                            record.get('sector'),
+                            record.get('industry')
                         ))
                     except Exception as e:
                         logging.error(f"Error processing metadata record for batch insert: {e}, record: {record}")
@@ -341,7 +344,7 @@ class PostgresTools:
                 insert_query = f"""
                                 INSERT INTO {table_name} (
                                     symbol, name, market, locale, active, 
-                                    primary_exchange, type
+                                    primary_exchange, type, marketCap, sector, industry
                                 )
                                 VALUES %s
                                 ON CONFLICT (symbol)
@@ -352,7 +355,10 @@ class PostgresTools:
                                     locale = EXCLUDED.locale,
                                     active = EXCLUDED.active,
                                     primary_exchange = EXCLUDED.primary_exchange,
-                                    type = EXCLUDED.type;
+                                    type = EXCLUDED.type,
+                                    marketCap = EXCLUDED.marketCap,
+                                    sector = EXCLUDED.sector,
+                                    industry = EXCLUDED.industry;
                                 """
                 
                 extras.execute_values(cursor, insert_query, values)
@@ -574,4 +580,4 @@ class JDBCSparkTools:
 if __name__ == "__main__":
     postgres_url = "postgresql://yiukitcheung:409219@localhost:5432/condvest"
     postgres_tool = PostgresTools(postgres_url)
-    print(postgres_tool.fetch_latest_date("raw_ohlcv").keys())
+    print(postgres_tool.fetch_latest_date("test_raw_ohlcv").keys())

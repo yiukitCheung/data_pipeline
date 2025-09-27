@@ -16,7 +16,7 @@ from decimal import Decimal
 import sys
 sys.path.append('/opt/python')  # Lambda layer path
 from shared.clients.polygon_client import PolygonClient
-from shared.clients.aurora_client import AuroraClient
+from shared.clients.rds_timescale_client import RDSTimescaleClient
 from shared.models.data_models import OHLCVData, BatchProcessingJob
 from shared.utils.market_calendar import is_trading_day
 
@@ -38,10 +38,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     try:
         # Initialize clients
         polygon_client = PolygonClient(api_key=os.environ['POLYGON_API_KEY'])
-        aurora_client = AuroraClient(
-            cluster_arn=os.environ['AURORA_CLUSTER_ARN'],
-            secret_arn=os.environ['AURORA_SECRET_ARN'],
-            database_name=os.environ['DATABASE_NAME']
+        rds_client = RDSTimescaleClient(
+            secret_arn=os.environ['RDS_SECRET_ARN']
         ) 
         
         # Parse event parameters
@@ -81,8 +79,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         
         # Get symbols to process
         if symbols is None:
-            symbols = aurora_client.get_active_symbols()
-            logger.info(f"Fetched {len(symbols)} active symbols from database")
+            symbols = rds_client.get_active_symbols()
+            logger.info(f"Fetched {len(symbols)} active symbols from RDS TimescaleDB")
         
         batch_job.symbols_processed = symbols
         
@@ -99,8 +97,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                 ohlcv_data = polygon_client.fetch_batch_ohlcv_data(batch_symbols, target_date)
                 
                 if ohlcv_data:
-                    # Store in Aurora
-                    records_inserted = aurora_client.insert_ohlcv_data(ohlcv_data)
+                    # Store in RDS TimescaleDB
+                    records_inserted = rds_client.insert_ohlcv_data(ohlcv_data)
                     total_records += records_inserted
                     
                     logger.info(f"Inserted {records_inserted} records for batch")
@@ -118,7 +116,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         batch_job.records_processed = total_records
         
         # Store job metadata (optional - for monitoring)
-        store_job_metadata(aurora_client, batch_job)
+        store_job_metadata(rds_client, batch_job)
         
         # Trigger downstream processing (Silver layer - Fibonacci resampling)
         trigger_fibonacci_resampling_job(target_date)
@@ -145,7 +143,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             batch_job.status = 'FAILED'
             batch_job.end_time = datetime.utcnow()
             batch_job.error_message = str(e)
-            store_job_metadata(aurora_client, batch_job)
+            store_job_metadata(rds_client, batch_job)
         
         return {
             'statusCode': 500,
@@ -183,12 +181,12 @@ def get_previous_trading_day() -> datetime.date:
     # Fallback to yesterday if no trading day found
     return today - timedelta(days=1)
 
-def store_job_metadata(aurora_client: AuroraClient, batch_job: BatchProcessingJob):
+def store_job_metadata(rds_client: RDSTimescaleClient, batch_job: BatchProcessingJob):
     """
     Store batch job metadata for monitoring
     """
     try:
-        aurora_client.insert_batch_job_metadata(batch_job)
+        rds_client.insert_batch_job_metadata(batch_job)
     except Exception as e:
         logger.error(f"Error storing job metadata: {str(e)}")
         # Don't fail the main job for metadata storage issues

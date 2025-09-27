@@ -1,57 +1,35 @@
 # Batch Layer Local Development Environment
 # Purpose: Test Fibonacci resampling logic locally
 
+
 version: '3.8'
 
 services:
-  # TimescaleDB for local testing
+  # TimescaleDB for Prefect Bronze Layer
   timescaledb:
     image: timescale/timescaledb:latest-pg15
     container_name: batch-timescaledb
     environment:
       POSTGRES_DB: condvest
-      POSTGRES_USER: condvest_user
-      POSTGRES_PASSWORD: condvest_pass
+      POSTGRES_USER: yiukitcheung
+      POSTGRES_PASSWORD: "409219"
       TIMESCALEDB_TELEMETRY: 'off'
     ports:
-      - "5433:5432"  # Use 5433 to avoid conflicts
+      - "5434:5432"  # External port 5434 to match your connection string
     volumes:
-      - batch_timescale_data:/var/lib/postgresql/data
-      - ./init_sql:/docker-entrypoint-initdb.d
+      - prefect_timescale_data:/var/lib/postgresql/data
+      - ./database:/docker-entrypoint-initdb.d  # Auto-run SQL scripts
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U condvest_user -d condvest"]
+      test: ["CMD-SHELL", "pg_isready -U yiukitcheung -d condvest"]
       interval: 30s
       timeout: 10s
-      retries: 3
-    networks:
-      - batch-network
-
-  # Python environment for testing
-  resampler-test:
-    build:
-      context: ..
-      dockerfile: local_dev/Dockerfile.test
-    container_name: batch-resampler-test
-    environment:
-      DATABASE_URL: "postgresql://condvest_user:condvest_pass@timescaledb:5432/condvest"
-      LOG_LEVEL: "INFO"
-      ENVIRONMENT: "local"
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    networks:
-      - batch-network
-    volumes:
-      - ../shared:/app/shared:ro
-      - ./local_resampler.py:/app/local_resampler.py:ro
-    working_dir: /app
-    command: tail -f /dev/null  # Keep container running
+      retries: 5
+    restart: unless-stopped
 
 volumes:
-  batch_timescale_data:
-    name: batch-timescale-data
+  prefect_timescale_data:
+    name: prefect-timescale-data
 
 networks:
-  batch-network:
-    name: batch-network
-    driver: bridge
+  default:
+    name: prefect-network
