@@ -184,7 +184,7 @@ variable "enable_detailed_monitoring" {
 variable "daily_schedule_expression" {
   description = "EventBridge schedule for daily OHLCV fetch and processing"
   type        = string
-  default     = "cron(15 21 * * MON-FRI *)"  # 9:15 PM EST weekdays (15 min after 4 PM market close)
+  default     = "cron(5 21 * * ? *)"  # 4:05 PM EST weekdays (9:05 PM UTC)
 }
 
 variable "enable_scheduling" {
@@ -262,10 +262,4 @@ variable "batch_job_vcpus" {
   description = "vCPUs for batch job"
   type        = string
   default     = "1.0"
-}
-
-variable "batch_job_memory" {
-  description = "Memory for batch job in MB"
-  type        = string
-  default     = "2048"
 }

@@ -10,10 +10,6 @@ resource "aws_batch_compute_environment" "fibonacci_resampling" {
 
   compute_resources {
     type                = "FARGATE_SPOT"
-    allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
-    
-    # Cost optimization - use Spot instances
-    bid_percentage = 50  # Bid up to 50% of On-Demand price
     
     # Compute limits
     max_vcpus = var.batch_max_vcpus
@@ -22,9 +18,6 @@ resource "aws_batch_compute_environment" "fibonacci_resampling" {
     subnets = local.subnet_ids
     security_group_ids = [aws_security_group.batch_compute.id]
     
-    tags = merge(local.common_tags, {
-      Name = "${local.name_prefix}-batch-compute"
-    })
   }
 
   depends_on = [aws_iam_role_policy_attachment.batch_service_role]
@@ -39,8 +32,10 @@ resource "aws_batch_job_queue" "fibonacci_resampling" {
   name                 = "${local.name_prefix}-fibonacci-resampling-queue"
   state               = "ENABLED"
   priority            = 1
-  compute_environments = [aws_batch_compute_environment.fibonacci_resampling.arn]
-
+  compute_environment_order {
+    order               = 1
+    compute_environment = aws_batch_compute_environment.fibonacci_resampling.arn
+  }
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-fibonacci-resampling-queue"
   })
@@ -72,10 +67,9 @@ resource "aws_batch_job_definition" "fibonacci_resampling" {
   platform_capabilities = ["FARGATE"]
 
   container_properties = jsonencode({
-    image      = "${aws_ecr_repository.fibonacci_resampler.repository_url}:latest"
-    vcpus      = var.batch_job_vcpus
-    memory     = var.batch_job_memory
-    jobRoleArn = aws_iam_role.batch_execution_role.arn
+    image           = "${aws_ecr_repository.fibonacci_resampler.repository_url}:latest"
+    jobRoleArn      = aws_iam_role.batch_execution_role.arn
+    executionRoleArn = aws_iam_role.batch_execution_role.arn
     
     # Environment variables for Fibonacci resampling (3-34)
     environment = [
@@ -210,7 +204,6 @@ resource "aws_cloudwatch_event_target" "batch_resampling" {
   batch_target {
     job_definition = aws_batch_job_definition.fibonacci_resampling.name
     job_name       = "${local.name_prefix}-fibonacci-resampling"
-    job_queue      = aws_batch_job_queue.fibonacci_resampling.name
   }
 
   input = jsonencode({

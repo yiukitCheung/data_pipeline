@@ -38,6 +38,16 @@ output "daily_ohlcv_fetcher_function_name" {
   value       = aws_lambda_function.daily_ohlcv_fetcher.function_name
 }
 
+output "daily_meta_fetcher_function_arn" {
+  description = "ARN of the daily metadata fetcher Lambda function"
+  value       = aws_lambda_function.daily_meta_fetcher.arn
+}
+
+output "daily_meta_fetcher_function_name" {
+  description = "Name of the daily metadata fetcher Lambda function"
+  value       = aws_lambda_function.daily_meta_fetcher.function_name
+}
+
 # AWS Batch Outputs (Silver Layer - Fibonacci Resampling)
 output "fibonacci_batch_job_queue_arn" {
   description = "ARN of the Fibonacci resampling batch job queue"
@@ -92,15 +102,25 @@ output "batch_log_group_name" {
   value       = aws_cloudwatch_log_group.batch_jobs.name
 }
 
-output "lambda_log_group_name" {
-  description = "Name of the CloudWatch log group for Lambda function"
+output "ohlcv_lambda_log_group_name" {
+  description = "Name of the CloudWatch log group for OHLCV Lambda function"
   value       = aws_cloudwatch_log_group.lambda_logs.name
 }
 
+output "meta_lambda_log_group_name" {
+  description = "Name of the CloudWatch log group for metadata Lambda function"
+  value       = aws_cloudwatch_log_group.meta_lambda_logs.name
+}
+
 # Scheduling Outputs
-output "daily_schedule_rule_arn" {
-  description = "ARN of the EventBridge rule for daily scheduling"
-  value       = aws_cloudwatch_event_rule.daily_resampling.arn
+output "daily_ohlcv_schedule_rule_arn" {
+  description = "ARN of the EventBridge rule for daily OHLCV fetching"
+  value       = aws_cloudwatch_event_rule.daily_ohlcv_fetch.arn
+}
+
+output "daily_meta_schedule_rule_arn" {
+  description = "ARN of the EventBridge rule for daily metadata fetching"
+  value       = aws_cloudwatch_event_rule.daily_meta_fetch.arn
 }
 
 # Configuration Outputs

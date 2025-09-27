@@ -14,7 +14,7 @@ terraform {
   backend "s3" {
     bucket = "condvest-terraform-state"
     key    = "batch-layer/terraform.tfstate"
-    region = "us-east-1"
+    region = "ca-west-1"
   }
 }
 
@@ -33,9 +33,7 @@ provider "aws" {
 
 # Data sources for existing infrastructure
 data "aws_vpc" "main" {
-  tags = {
-    Name = "${var.environment}-condvest-vpc"
-  }
+  default = true  # Use the default VPC
 }
 
 data "aws_subnets" "private" {
@@ -44,14 +42,14 @@ data "aws_subnets" "private" {
     values = [data.aws_vpc.main.id]
   }
   
-  tags = {
-    Type = "private"
+  # Use all subnets in the default VPC (they're all public but that's fine for this setup)
+  filter {
+    name   = "state"
+    values = ["available"]
   }
 }
 
-data "aws_security_group" "aurora" {
-  name = "${var.environment}-aurora-security-group"
-}
+# Aurora security group reference removed - now using RDS TimescaleDB
 
 # Local values for consistent naming and configuration
 locals {

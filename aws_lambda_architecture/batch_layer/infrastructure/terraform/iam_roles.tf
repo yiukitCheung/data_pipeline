@@ -118,6 +118,12 @@ resource "aws_iam_role" "lambda_execution_role" {
   tags = local.common_tags
 }
 
+# Attach VPC execution policy to Lambda role
+resource "aws_iam_role_policy_attachment" "lambda_vpc_execution" {
+  role       = aws_iam_role.lambda_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 resource "aws_iam_role_policy" "lambda_execution_role" {
   name = "${local.name_prefix}-lambda-execution-policy"
   role = aws_iam_role.lambda_execution_role.id
@@ -143,6 +149,17 @@ resource "aws_iam_role_policy" "lambda_execution_role" {
           aws_secretsmanager_secret.timescale_credentials.arn,
           var.polygon_api_key_secret_arn
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DeleteNetworkInterface",
+          "ec2:AttachNetworkInterface",
+          "ec2:DetachNetworkInterface"
+        ]
+        Resource = "*"
       },
       {
         Effect = "Allow"

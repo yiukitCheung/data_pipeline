@@ -80,7 +80,7 @@ resource "aws_db_instance" "timescale" {
 
   # Engine Configuration
   engine         = "postgres"
-  engine_version = "15.5"  # TimescaleDB supports PostgreSQL 15
+  engine_version = "15.8"  # TimescaleDB supports PostgreSQL 15
   instance_class = var.db_instance_class
 
   # Storage Configuration (cost-optimized)
@@ -93,6 +93,10 @@ resource "aws_db_instance" "timescale" {
   db_name  = var.database_name
   username = var.db_username
   password = random_password.timescale_password.result
+  
+  # Parameter Group
+  parameter_group_name = aws_db_parameter_group.timescale.name
+  apply_immediately    = false
 
   # Network Configuration
   db_subnet_group_name   = aws_db_subnet_group.timescale.name
@@ -127,44 +131,47 @@ resource "aws_db_parameter_group" "timescale" {
   name   = "${var.environment}-timescale-params"
 
   # TimescaleDB specific parameters
+
   parameter {
-    name  = "shared_preload_libraries"
-    value = "timescaledb"
+    name         = "max_connections"
+    value        = "100"  # Adjust based on your needs
+    apply_method = "pending-reboot"
   }
 
   parameter {
-    name  = "max_connections"
-    value = "100"  # Adjust based on your needs
+    name         = "work_mem"
+    value        = "16384"  # 16MB for sorting operations
+    apply_method = "immediate"
   }
 
   parameter {
-    name  = "work_mem"
-    value = "16384"  # 16MB for sorting operations
+    name         = "maintenance_work_mem"
+    value        = "131072"  # 128MB for maintenance operations
+    apply_method = "immediate"
   }
 
   parameter {
-    name  = "maintenance_work_mem"
-    value = "131072"  # 128MB for maintenance operations
+    name         = "checkpoint_completion_target"
+    value        = "0.9"
+    apply_method = "immediate"
   }
 
   parameter {
-    name  = "checkpoint_completion_target"
-    value = "0.9"
+    name         = "wal_buffers"
+    value        = "16384"  # 16MB
+    apply_method = "pending-reboot"
   }
 
   parameter {
-    name  = "wal_buffers"
-    value = "16384"  # 16MB
+    name         = "default_statistics_target"
+    value        = "100"
+    apply_method = "immediate"
   }
 
   parameter {
-    name  = "default_statistics_target"
-    value = "100"
-  }
-
-  parameter {
-    name  = "random_page_cost"
-    value = "1.1"  # Optimized for SSD storage
+    name         = "random_page_cost"
+    value        = "1.1"  # Optimized for SSD storage
+    apply_method = "immediate"
   }
 
   tags = {
