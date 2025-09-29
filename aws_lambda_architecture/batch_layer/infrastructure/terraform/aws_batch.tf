@@ -75,7 +75,7 @@ resource "aws_batch_job_definition" "fibonacci_resampling" {
     environment = [
         {
           name  = "DB_SECRET_ARN"
-          value = aws_secretsmanager_secret.timescale_credentials.arn
+          value = aws_secretsmanager_secret.postgres_credentials.arn
         },
         {
           name  = "DATABASE_NAME"

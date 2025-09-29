@@ -63,6 +63,12 @@ variable "db_max_allocated_storage" {
   default     = 100  # Scale up to 100GB automatically
 }
 
+variable "postgres_engine_version" {
+  description = "PostgreSQL engine version"
+  type        = string
+  default     = "15.8"  # Latest available in ca-west-1
+}
+
 variable "backup_retention_days" {
   description = "Backup retention period in days"
   type        = number

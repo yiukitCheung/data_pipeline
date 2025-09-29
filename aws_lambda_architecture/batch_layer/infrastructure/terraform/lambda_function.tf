@@ -77,9 +77,9 @@ resource "aws_lambda_function" "daily_ohlcv_fetcher" {
   # Environment variables
   environment {
     variables = {
-      RDS_SECRET_ARN                      = aws_secretsmanager_secret.timescale_credentials.arn
+      RDS_SECRET_ARN                      = aws_secretsmanager_secret.postgres_credentials.arn
       DATABASE_NAME                       = var.database_name
-      RDS_ENDPOINT                        = aws_db_instance.timescale.address
+      RDS_ENDPOINT                        = aws_db_instance.postgres.address
       RDS_PORT                           = "5432"
       POLYGON_API_KEY_SECRET_ARN         = var.polygon_api_key_secret_arn
       BATCH_JOB_QUEUE                    = aws_batch_job_queue.fibonacci_resampling.name
@@ -163,7 +163,7 @@ resource "aws_lambda_function" "daily_meta_fetcher" {
   # Environment variables
   environment {
     variables = {
-      RDS_SECRET_ARN             = aws_secretsmanager_secret.timescale_credentials.arn
+      RDS_SECRET_ARN             = aws_secretsmanager_secret.postgres_credentials.arn
       DATABASE_NAME              = var.database_name
       RDS_ENDPOINT               = aws_db_instance.timescale.address
       RDS_PORT                   = "5432"

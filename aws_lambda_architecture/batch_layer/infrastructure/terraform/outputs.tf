@@ -1,20 +1,20 @@
 # Terraform Outputs for Batch Layer
 # Purpose: Export key resources for integration with other layers
 
-# Database Outputs (TimescaleDB)
-output "timescale_endpoint" {
-  description = "TimescaleDB endpoint for stock data"
-  value       = aws_db_instance.timescale.address
+# Database Outputs (PostgreSQL)
+output "postgres_endpoint" {
+  description = "PostgreSQL endpoint for stock data"
+  value       = aws_db_instance.postgres.address
 }
 
-output "timescale_port" {
-  description = "TimescaleDB port"
-  value       = aws_db_instance.timescale.port
+output "postgres_port" {
+  description = "PostgreSQL port"
+  value       = aws_db_instance.postgres.port
 }
 
-output "timescale_secret_arn" {
-  description = "Secrets Manager ARN for TimescaleDB credentials"
-  value       = aws_secretsmanager_secret.timescale_credentials.arn
+output "postgres_secret_arn" {
+  description = "Secrets Manager ARN for PostgreSQL credentials"
+  value       = aws_secretsmanager_secret.postgres_credentials.arn
 }
 
 output "database_name" {
@@ -22,9 +22,9 @@ output "database_name" {
   value       = var.database_name
 }
 
-output "timescale_security_group_id" {
-  description = "Security group ID for TimescaleDB"
-  value       = aws_security_group.timescale.id
+output "postgres_security_group_id" {
+  description = "Security group ID for PostgreSQL"
+  value       = aws_security_group.postgres.id
 }
 
 # Lambda Function Outputs (Bronze Layer)

@@ -1,243 +1,208 @@
-# Batch Layer - Fibonacci OHLCV Resampling
+# Batch Layer - Modular Architecture
 
-## 🎯 Purpose
+## 🏗️ **Architecture Overview**
 
-The Batch Layer handles daily OHLCV data processing and resampling into Fibonacci intervals (3-34) for technical analysis. It runs **15 minutes after market close** (9:15 PM EST) to ensure fresh data is processed immediately. It's optimized for cost efficiency using AWS Batch + Fargate Spot instances.
-
-## 🏗️ Architecture
-
-```mermaid
-graph TD
-    A["🕘 Daily Schedule<br/>9:15 PM EST"] --> B["⚡ Lambda: daily_ohlcv_fetcher<br/>Bronze Layer"]
-    B --> C["🗄️ Aurora: raw_ohlcv<br/>Daily OHLCV Data"]
-    B --> D["🚀 AWS Batch: Fibonacci Resampler<br/>Silver Layer"]
-    D --> E["🗄️ Aurora: silver_*d tables<br/>Fibonacci Intervals"]
-    
-    F["📊 Polygon API"] --> B
-    
-    style A fill:#e1f5fe
-    style B fill:#f3e5f5
-    style D fill:#e8f5e8
-    style C fill:#fff3e0
-    style E fill:#fff3e0
-```
-
-## 📁 Directory Structure
+The batch layer is now structured using a **hybrid modular approach** for industrial-grade deployment and testing:
 
 ```
 batch_layer/
-├── lambda_functions/           # Bronze Layer (Data Ingestion)
-│   └── daily_ohlcv_fetcher.py # Daily OHLCV data fetching
-├── data_processor/            # Silver Layer (Fibonacci Resampling)
-│   ├── resampler.py          # Aurora-optimized Fibonacci resampler
-│   ├── requirements.txt      # Python dependencies
-│   ├── Dockerfile           # Container for AWS Batch
-│   └── config/
-│       └── fibonacci_resampling.sql  # SQL template
-├── infrastructure/           # Infrastructure as Code
-│   └── terraform/           # Terraform modules
-│       ├── main.tf         # Provider configuration
-│       ├── variables.tf    # Input variables
-│       ├── aws_batch.tf    # Batch infrastructure
-│       └── outputs.tf      # Export values
-├── tests/                   # Testing framework
-└── README.md               # This documentation
+├── infrastructure/              # 🎯 Main Terraform (Production)
+│   ├── main.tf                 # Orchestrates all modules
+│   ├── variables.tf
+│   ├── terraform.tfvars
+│   └── modules/                # Terraform modules
+│       ├── fetching/
+│       ├── processing/
+│       ├── database/
+│       └── shared/
+├── fetching/                   # 📥 Data Fetching Component
+│   ├── lambda_functions/
+│   ├── deployment_packages/
+│   ├── terraform/              # For testing only
+│   └── requirements.txt
+├── processing/                 # ⚙️ Data Processing Component
+│   ├── batch_jobs/
+│   ├── container_images/
+│   ├── terraform/              # For testing only
+│   └── requirements.txt
+├── database/                   # 🗄️ Database Component
+│   ├── schemas/
+│   ├── terraform/              # For testing only
+│   └── migrations/
+├── shared/                     # 🔄 Shared Resources
+│   ├── clients/
+│   ├── models/
+│   └── utils/
+└── deploy.sh                   # 🚀 Main deployment script
 ```
 
-## 🔢 Fibonacci Intervals (Your Original Settings)
+## 🚀 **Quick Start**
 
-Based on your `prefect_medallion/config/settings.yaml`:
-
-- **Fibonacci Sequence**: 3, 5, 8, 13, 21, 34
-- **Purpose**: Technical analysis and backtesting
-- **Storage**: `silver_3d`, `silver_5d`, `silver_8d`, `silver_13d`, `silver_21d`, `silver_34d`
-
-## ⚡ Performance Optimization
-
-### Your DuckDB → Aurora Migration
-
-**Your Original DuckDB Approach (Proven):**
-```sql
-WITH numbered AS (
-    SELECT *, ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date) AS rn
-    FROM raw_data
-),
-grp AS (
-    SELECT *, (rn - 1) / {interval} AS grp_id FROM numbered
-)
-SELECT symbol, MIN(date), FIRST(open), MAX(high), MIN(low), LAST(close), SUM(volume)
-FROM grp GROUP BY symbol, grp_id
-```
-
-**Aurora PostgreSQL Optimization:**
-```sql
--- Same logic, Aurora-optimized with window functions
-WITH numbered AS (
-    SELECT symbol, date, open, high, low, close, volume,
-           ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date) AS rn
-    FROM raw_ohlcv WHERE interval_type = '1d'
-),
-grp AS (
-    SELECT *, (rn - 1) / {interval} AS grp_id FROM numbered
-)
-SELECT symbol, MIN(date),
-       FIRST_VALUE(open) OVER (PARTITION BY symbol, grp_id ORDER BY date) AS open,
-       MAX(high), MIN(low),
-       LAST_VALUE(close) OVER (PARTITION BY symbol, grp_id ORDER BY date) AS close,
-       SUM(volume)
-FROM grp GROUP BY symbol, grp_id
-```
-
-### Expected Performance
-
-| Metric | Your DuckDB | Aurora Optimized |
-|--------|-------------|------------------|
-| **50 symbols × 6 intervals** | ~10-15 seconds | ~30-45 seconds |
-| **500 symbols × 6 intervals** | ~30-45 seconds | ~45-90 seconds |
-| **Target** | ✅ Sub-minute | ✅ **Sub-minute achievable** |
-
-## 💰 Cost Efficiency
-
-### AWS Batch + Fargate Spot (70% Savings)
-
-- **Compute**: Fargate Spot (70% cheaper than on-demand)
-- **Scheduling**: Daily after market close
-- **Resource**: 1 vCPU, 2GB RAM (sufficient for Aurora queries)
-- **Expected Monthly Cost**: $5-15 for daily processing
-
-### Cost Breakdown
-```
-Daily Job:
-- Duration: ~1-2 minutes
-- Fargate Spot: $0.01-0.02 per job
-- Monthly (22 trading days): $0.22-0.44
-- Aurora queries: $2-5/month
-- Total: $3-8/month
-```
-
-## 🚀 Getting Started
-
-### 1. Deploy Infrastructure
-
+### **Production Deployment (Single Command)**
 ```bash
-cd infrastructure/terraform
+# Deploy entire batch layer
+./deploy.sh dev all
 
-# Initialize Terraform
-terraform init
+# Deploy to production
+./deploy.sh prod all
+```
 
-# Plan deployment
-terraform plan -var-file="terraform.tfvars"
+### **Component Development & Testing**
+```bash
+# Test only the fetching component
+./deploy.sh dev fetching
 
-# Deploy
+# Test only the processing component  
+./deploy.sh dev processing
+
+# Build artifacts without deploying
+./deploy.sh dev build
+```
+
+## 📋 **Deployment Commands**
+
+### **Main Commands**
+```bash
+./deploy.sh [environment] [component]
+```
+
+| Command | Description |
+|---------|-------------|
+| `./deploy.sh dev all` | Deploy entire batch layer to dev |
+| `./deploy.sh prod all` | Deploy entire batch layer to production |
+| `./deploy.sh dev fetching` | Deploy only fetching component |
+| `./deploy.sh dev processing` | Deploy only processing component |
+| `./deploy.sh dev build` | Build all deployment artifacts |
+| `./deploy.sh dev init` | Initialize Terraform |
+| `./deploy.sh dev plan` | Plan infrastructure changes |
+| `./deploy.sh dev destroy` | Destroy infrastructure |
+
+### **Manual Component Building**
+```bash
+# Build Lambda packages
+cd fetching/deployment_packages
+./build_packages.sh
+
+# Build Docker container
+cd processing/container_images
+./build_container.sh
+```
+
+## 🏭 **Industrial Benefits**
+
+### ✅ **Production Advantages**
+- **Single Command Deployment**: `./deploy.sh prod all`
+- **Consistent Infrastructure**: All modules deployed together
+- **Dependency Management**: Terraform handles module dependencies
+- **State Management**: Single state file for production
+
+### ✅ **Development Advantages**
+- **Component Isolation**: Test individual components
+- **Fast Iteration**: Deploy only what changed
+- **Independent Testing**: Each component has its own Terraform
+- **Parallel Development**: Teams can work on different components
+
+### ✅ **Enterprise Features**
+- **Terraform Modules**: Reusable across environments
+- **Version Control**: Each component can be versioned
+- **CI/CD Ready**: Scripts work in automation pipelines
+- **Cost Optimization**: Deploy only what you need for testing
+
+## 📊 **Component Details**
+
+### **Fetching Component**
+- **Purpose**: Fetch daily OHLCV and metadata from external APIs
+- **Technology**: AWS Lambda (Python)
+- **Scheduling**: EventBridge cron expressions
+- **Output**: Data stored in PostgreSQL
+
+### **Processing Component**
+- **Purpose**: Resample data using Fibonacci intervals (3-34 days)
+- **Technology**: AWS Batch + Fargate Spot (70% cost savings)
+- **Trigger**: Automated after data fetching
+- **Output**: Resampled data for backtesting
+
+### **Database Component**
+- **Purpose**: PostgreSQL optimized for time-series data
+- **Technology**: RDS PostgreSQL with custom parameter group
+- **Features**: Automated backups, monitoring, security groups
+
+### **Shared Component**
+- **Purpose**: Common IAM roles, security groups, utilities
+- **Technology**: Terraform modules
+- **Benefits**: DRY principle, centralized security
+
+## 🔄 **Terraform State Management**
+
+### **Production State**
+```hcl
+# Single state file for production
+backend "s3" {
+  bucket = "condvest-terraform-state"
+  key    = "batch-layer/terraform.tfstate"
+  region = "ca-west-1"
+}
+```
+
+### **Component Testing States**
+```hcl
+# Separate state files for testing
+backend "s3" {
+  bucket = "condvest-terraform-state"
+  key    = "batch-layer/components/fetching/terraform.tfstate"
+  region = "ca-west-1"
+}
+```
+
+## 🛠️ **Development Workflow**
+
+### **1. Component Development**
+```bash
+# Work on fetching component
+cd fetching/
+# Make changes to lambda_functions/
+./deployment_packages/build_packages.sh
+./terraform/
 terraform apply
 ```
 
-### 2. Build and Push Docker Image
-
+### **2. Integration Testing**
 ```bash
-# Build the Fibonacci resampler image
-cd data_processor
-docker build -t fibonacci-resampler .
-
-# Tag and push to ECR
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ecr-url>
-docker tag fibonacci-resampler:latest <ecr-url>/fibonacci-resampler:latest
-docker push <ecr-url>/fibonacci-resampler:latest
+# Test all components together
+./deploy.sh dev all
 ```
 
-### 3. Test the Pipeline
-
+### **3. Production Deployment**
 ```bash
-# Test Lambda function locally
-cd lambda_functions
-python daily_ohlcv_fetcher.py
-
-# Test Fibonacci resampler locally
-cd data_processor
-python resampler.py --intervals 3 5 8
+# Deploy to production
+./deploy.sh prod all
 ```
 
-## 📊 Monitoring
+## 📈 **Monitoring & Costs**
 
-### CloudWatch Metrics
+### **Cost Optimization**
+- **Fargate Spot**: 70% savings on batch processing
+- **Component-based testing**: Deploy only what's needed
+- **Scheduled scaling**: Resources scale to zero when not needed
 
-- **Lambda Duration**: Daily OHLCV fetch performance
-- **Batch Job Duration**: Fibonacci resampling performance
-- **Cost Tracking**: Spot instance savings
-- **Error Rates**: Job failure monitoring
+### **Monitoring**
+- **CloudWatch Logs**: Centralized logging for all components
+- **Terraform Outputs**: Key ARNs and endpoints
+- **Cost Tags**: All resources tagged for cost tracking
 
-### Performance Targets
+## 🔧 **Prerequisites**
 
-- **Bronze Layer (Lambda)**: < 15 minutes
-- **Silver Layer (Batch)**: < 60 seconds ✅
-- **Total Pipeline**: < 20 minutes
-- **Cost**: < $15/month
+- AWS CLI configured
+- Terraform >= 1.5.0
+- Docker (for processing component)
+- Python 3.11+ (for Lambda functions)
 
-## 🔧 Configuration
+## 🎯 **Next Steps**
 
-### Key Variables (terraform.tfvars)
+This modular structure provides the foundation for:
+1. **Speed Layer**: Real-time processing components
+2. **Serving Layer**: API and query interfaces  
+3. **Multi-Environment**: Dev/Staging/Prod separation
+4. **Team Scaling**: Multiple teams working on different components
 
-```hcl
-# Environment
-environment = "dev"
-aws_region = "us-east-1"
-
-# Aurora Configuration
-aurora_cluster_arn = "arn:aws:rds:us-east-1:..."
-aurora_secret_arn = "arn:aws:secretsmanager:..."
-
-# Fibonacci Configuration
-fibonacci_intervals = [3, 5, 8, 13, 21, 34]
-fibonacci_lookback_days = 300
-
-# Scheduling (after market close)
-daily_schedule_expression = "cron(15 21 * * MON-FRI *)"  # 9:15 PM EST weekdays
-
-# Cost Optimization
-batch_compute_type = "FARGATE_SPOT"
-spot_allocation_strategy = "SPOT_CAPACITY_OPTIMIZED"
-```
-
-## 🧪 Testing
-
-### Unit Tests
-```bash
-cd tests
-python -m pytest test_resampler.py -v
-```
-
-### Integration Tests
-```bash
-# Test full pipeline
-python test_integration.py --environment dev
-```
-
-## 🏆 Migration Benefits
-
-### ✅ Preserved Your Logic
-- **Same ROW_NUMBER approach** from your DuckDB implementation
-- **Same Fibonacci intervals** (3, 5, 8, 13, 21, 34)
-- **Same incremental processing** for efficiency
-
-### ✅ Added AWS Scale
-- **Aurora PostgreSQL**: Serverless, auto-scaling database
-- **AWS Batch**: Managed container orchestration
-- **Fargate Spot**: 70% cost savings
-- **EventBridge**: Automated scheduling
-
-### ✅ Performance Target Met
-- **Your DuckDB**: ~15-30 seconds
-- **Aurora Optimized**: ~30-60 seconds
-- **✅ Still sub-minute!**
-
-## 📚 Next Steps
-
-1. **Deploy Infrastructure**: `terraform apply`
-2. **Build Container**: Docker image for Fibonacci resampler
-3. **Test Pipeline**: Verify sub-minute performance
-4. **Monitor Costs**: Track Fargate Spot savings
-5. **Optimize Queries**: Fine-tune Aurora performance if needed
-
----
-
-**🎯 Goal Achieved**: Your proven DuckDB Fibonacci resampling (3-34) is now AWS-native with sub-minute performance and 70% cost savings!
+The architecture follows industrial best practices used by Netflix, Airbnb, and other tech giants! 🚀
