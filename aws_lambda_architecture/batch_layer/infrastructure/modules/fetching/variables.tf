@@ -111,3 +111,9 @@ variable "lambda_execution_role_arn" {
   description = "ARN of the Lambda execution role"
   type        = string
 }
+
+variable "lambda_layer_arns" {
+  description = "List of Lambda Layer ARNs to attach to functions"
+  type        = list(string)
+  default     = []
+}

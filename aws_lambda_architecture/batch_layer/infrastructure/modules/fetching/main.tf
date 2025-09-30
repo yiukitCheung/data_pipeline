@@ -46,6 +46,9 @@ resource "aws_lambda_function" "daily_ohlcv_fetcher" {
   timeout     = var.lambda_timeout
   memory_size = var.lambda_memory_size
 
+  # Lambda Layers for heavy dependencies
+  layers = var.lambda_layer_arns
+
   # VPC Configuration
   vpc_config {
     subnet_ids         = var.subnet_ids
@@ -89,6 +92,9 @@ resource "aws_lambda_function" "daily_meta_fetcher" {
   runtime     = var.lambda_runtime
   timeout     = 900  # 15 minutes for metadata (longer due to rate limiting)
   memory_size = var.lambda_memory_size
+
+  # Lambda Layers for heavy dependencies
+  layers = var.lambda_layer_arns
 
   # VPC Configuration
   vpc_config {

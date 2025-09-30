@@ -40,7 +40,15 @@ deploy_all() {
 build_artifacts() {
     echo "📦 Building deployment artifacts..."
     
-    # Build Lambda packages
+    # Build Lambda Layer first (contains heavy dependencies)
+    if [ -f "fetching/deployment_packages/build_layer.sh" ]; then
+        echo "🔧 Building Lambda Layer..."
+        cd fetching/deployment_packages
+        ./build_layer.sh --publish
+        cd ../..
+    fi
+    
+    # Build Lambda packages (now lightweight without heavy deps)
     if [ -f "fetching/deployment_packages/build_packages.sh" ]; then
         echo "🔧 Building Lambda packages..."
         cd fetching/deployment_packages
@@ -140,6 +148,15 @@ case $COMPONENT in
         validate_prerequisites
         build_artifacts
         ;;
+    "layer")
+        echo "🔧 Building and publishing Lambda Layer..."
+        validate_prerequisites
+        if [ -f "fetching/deployment_packages/build_layer.sh" ]; then
+            cd fetching/deployment_packages
+            ./build_layer.sh --publish
+            cd ../..
+        fi
+        ;;
     "init")
         echo "🔧 Initializing infrastructure..."
         cd infrastructure
@@ -175,6 +192,7 @@ case $COMPONENT in
         echo "  processing - Deploy only processing component"
         echo "  database   - Deploy only database component"
         echo "  build      - Build artifacts only"
+        echo "  layer      - Build and publish Lambda Layer only"
         echo "  init       - Initialize Terraform"
         echo "  plan       - Plan infrastructure"
         echo "  destroy    - Destroy infrastructure"

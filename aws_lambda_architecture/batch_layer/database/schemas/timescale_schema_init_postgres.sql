@@ -5,7 +5,7 @@
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- Create symbol metadata table (not a hypertable, just regular table)
-CREATE TABLE IF NOT EXISTS test_symbol_metadata (
+CREATE TABLE IF NOT EXISTS symbol_metadata (
     symbol VARCHAR(50) PRIMARY KEY,
     name VARCHAR(255),
     market VARCHAR(100),
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS test_symbol_metadata (
 );
 
 -- Create raw OHLCV table and convert to hypertable with chunk and compression
-CREATE TABLE IF NOT EXISTS test_raw_ohlcv (
+CREATE TABLE IF NOT EXISTS raw_ohlcv (
     symbol VARCHAR(50) NOT NULL,
     open DECIMAL(10,2) NOT NULL,
     high DECIMAL(10,2) NOT NULL,
@@ -33,21 +33,21 @@ CREATE TABLE IF NOT EXISTS test_raw_ohlcv (
 );
 
 -- Convert to hypertable with 7 day chunk interval (adjust as needed)
-SELECT create_hypertable('test_raw_ohlcv', 'timestamp', if_not_exists => TRUE, chunk_time_interval => INTERVAL '7 days');
+SELECT create_hypertable('raw_ohlcv', 'timestamp', if_not_exists => TRUE, chunk_time_interval => INTERVAL '7 days');
 
 -- Enable compression on raw_ohlcv, compress by symbol and timestamp
-ALTER TABLE test_raw_ohlcv SET (
+ALTER TABLE raw_ohlcv SET (
     timescaledb.compress,
     timescaledb.compress_orderby = 'timestamp DESC',
     timescaledb.compress_segmentby = 'symbol'
 );
 
 -- Set compression policy to compress chunks older than 7 days (adjust as needed)
-SELECT add_compression_policy('test_raw_ohlcv', INTERVAL '7 days');
+SELECT add_compression_policy('raw_ohlcv', INTERVAL '7 days');
 
 -- Create Fibonacci resampled tables (silver layer) as hypertables with chunking and compression
 
-CREATE TABLE IF NOT EXISTS test_silver_3d (
+CREATE TABLE IF NOT EXISTS silver_3d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     open DECIMAL(10,2) NOT NULL,
@@ -59,17 +59,17 @@ CREATE TABLE IF NOT EXISTS test_silver_3d (
     PRIMARY KEY (symbol, date)
 );
 
-SELECT create_hypertable('test_silver_3d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+SELECT create_hypertable('silver_3d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
 
-ALTER TABLE test_silver_3d SET (
+ALTER TABLE silver_3d SET (
     timescaledb.compress,
     timescaledb.compress_orderby = 'date DESC',
     timescaledb.compress_segmentby = 'symbol'
 );
 
-SELECT add_compression_policy('test_silver_3d', INTERVAL '7 days');
+SELECT add_compression_policy('silver_3d', INTERVAL '7 days');
 
-CREATE TABLE IF NOT EXISTS test_silver_5d (
+CREATE TABLE IF NOT EXISTS silver_5d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     open DECIMAL(10,2) NOT NULL,
@@ -81,17 +81,17 @@ CREATE TABLE IF NOT EXISTS test_silver_5d (
     PRIMARY KEY (symbol, date)
 );
 
-SELECT create_hypertable('test_silver_5d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+SELECT create_hypertable('silver_5d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
 
-ALTER TABLE test_silver_5d SET (
+ALTER TABLE silver_5d SET (
     timescaledb.compress,
     timescaledb.compress_orderby = 'date DESC',
     timescaledb.compress_segmentby = 'symbol'
 );
 
-SELECT add_compression_policy('test_silver_5d', INTERVAL '7 days');
+SELECT add_compression_policy('silver_5d', INTERVAL '7 days');
 
-CREATE TABLE IF NOT EXISTS test_silver_8d (
+CREATE TABLE IF NOT EXISTS silver_8d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     open DECIMAL(10,2) NOT NULL,
@@ -103,17 +103,17 @@ CREATE TABLE IF NOT EXISTS test_silver_8d (
     PRIMARY KEY (symbol, date)
 );
 
-SELECT create_hypertable('test_silver_8d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+SELECT create_hypertable('silver_8d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
 
-ALTER TABLE test_silver_8d SET (
+ALTER TABLE silver_8d SET (
     timescaledb.compress,
     timescaledb.compress_orderby = 'date DESC',
     timescaledb.compress_segmentby = 'symbol'
 );
 
-SELECT add_compression_policy('test_silver_8d', INTERVAL '7 days');
+SELECT add_compression_policy('silver_8d', INTERVAL '7 days');
 
-CREATE TABLE IF NOT EXISTS test_silver_13d (
+CREATE TABLE IF NOT EXISTS silver_13d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     open DECIMAL(10,2) NOT NULL,
@@ -125,17 +125,17 @@ CREATE TABLE IF NOT EXISTS test_silver_13d (
     PRIMARY KEY (symbol, date)
 );
 
-SELECT create_hypertable('test_silver_13d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+SELECT create_hypertable('silver_13d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
 
-ALTER TABLE test_silver_13d SET (
+ALTER TABLE silver_13d SET (
     timescaledb.compress,
     timescaledb.compress_orderby = 'date DESC',
     timescaledb.compress_segmentby = 'symbol'
 );
 
-SELECT add_compression_policy('test_silver_13d', INTERVAL '7 days');
+SELECT add_compression_policy('silver_13d', INTERVAL '7 days');
 
-CREATE TABLE IF NOT EXISTS test_silver_21d (
+CREATE TABLE IF NOT EXISTS silver_21d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     open DECIMAL(10,2) NOT NULL,
@@ -147,17 +147,17 @@ CREATE TABLE IF NOT EXISTS test_silver_21d (
     PRIMARY KEY (symbol, date)
 );
 
-SELECT create_hypertable('test_silver_21d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+SELECT create_hypertable('silver_21d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
 
-ALTER TABLE test_silver_21d SET (
+ALTER TABLE silver_21d SET (
     timescaledb.compress,
     timescaledb.compress_orderby = 'date DESC',
     timescaledb.compress_segmentby = 'symbol'
 );
 
-SELECT add_compression_policy('test_silver_21d', INTERVAL '7 days');
+SELECT add_compression_policy('silver_21d', INTERVAL '7 days');
 
-CREATE TABLE IF NOT EXISTS test_silver_34d (
+CREATE TABLE IF NOT EXISTS silver_34d (
     symbol VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     open DECIMAL(10,2) NOT NULL,
@@ -169,12 +169,12 @@ CREATE TABLE IF NOT EXISTS test_silver_34d (
     PRIMARY KEY (symbol, date)
 );
 
-SELECT create_hypertable('test_silver_34d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
+SELECT create_hypertable('silver_34d', 'date', if_not_exists => TRUE, chunk_time_interval => INTERVAL '30 days');
 
-ALTER TABLE test_silver_34d SET (
+ALTER TABLE silver_34d SET (
     timescaledb.compress,
     timescaledb.compress_orderby = 'date DESC',
     timescaledb.compress_segmentby = 'symbol'
 );
 
-SELECT add_compression_policy('test_silver_34d', INTERVAL '7 days');
+SELECT add_compression_policy('silver_34d', INTERVAL '7 days');

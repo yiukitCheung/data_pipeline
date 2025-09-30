@@ -26,21 +26,48 @@ build_lambda_package() {
     # Create package directory
     mkdir -p "$package_dir"
     
-    # Install dependencies
-    pip install -r "$FETCHING_DIR/requirements.txt" -t "$package_dir"
+    # Install dependencies with optimizations
+    echo "📥 Installing dependencies..."
+    pip install -r "$FETCHING_DIR/requirements.txt" -t "$package_dir" \
+        --no-cache-dir \
+        --compile \
+        --no-deps \
+        || pip install -r "$FETCHING_DIR/requirements.txt" -t "$package_dir" --no-cache-dir
     
     # Copy Lambda function
     cp "$FETCHING_DIR/lambda_functions/$function_name.py" "$package_dir/"
     
-    # Copy shared modules
-    cp -r "$SHARED_DIR"/* "$package_dir/"
+    # Copy only essential shared modules
+    mkdir -p "$package_dir/shared"
+    cp -r "$SHARED_DIR/clients" "$package_dir/shared/"
+    cp -r "$SHARED_DIR/models" "$package_dir/shared/"
+    cp -r "$SHARED_DIR/utils" "$package_dir/shared/"
+    cp "$SHARED_DIR/__init__.py" "$package_dir/shared/"
     
-    # Create ZIP file
+    # Remove unnecessary files to reduce size
+    echo "🧹 Optimizing package size..."
+    find "$package_dir" -name "*.pyc" -delete
+    find "$package_dir" -name "*.pyo" -delete
+    find "$package_dir" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+    find "$package_dir" -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
+    find "$package_dir" -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
+    find "$package_dir" -name "test" -type d -exec rm -rf {} + 2>/dev/null || true
+    find "$package_dir" -name "*.so" -exec strip {} + 2>/dev/null || true
+    
+    # Create ZIP file with compression
     cd "$package_dir"
-    zip -r "../../../$function_name.zip" .
+    zip -r9 "$SCRIPT_DIR/$function_name.zip" . -x "*.pyc" "*/__pycache__/*" "*/tests/*" "*/test/*"
     cd "$SCRIPT_DIR"
     
-    echo "✅ Created $function_name.zip"
+    # Check package size
+    local size=$(du -h "$SCRIPT_DIR/$function_name.zip" | cut -f1)
+    echo "✅ Created $function_name.zip ($size)"
+    
+    # Warn if approaching limit
+    local size_bytes=$(stat -f%z "$SCRIPT_DIR/$function_name.zip" 2>/dev/null || stat -c%s "$SCRIPT_DIR/$function_name.zip")
+    if [ "$size_bytes" -gt 52428800 ]; then  # 50MB warning
+        echo "⚠️  Warning: Package size is ${size}, approaching 70MB Lambda limit"
+    fi
 }
 
 # Build Lambda packages

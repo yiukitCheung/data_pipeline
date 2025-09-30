@@ -150,3 +150,10 @@ variable "enable_cost_monitoring" {
   type        = bool
   default     = true
 }
+
+# Lambda Layers
+variable "lambda_layer_arns" {
+  description = "List of Lambda Layer ARNs for heavy dependencies"
+  type        = list(string)
+  default     = []
+}

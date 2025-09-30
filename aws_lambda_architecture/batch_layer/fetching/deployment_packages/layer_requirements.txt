@@ -1,0 +1,18 @@
+# Lambda Layer Dependencies - Heavy packages
+# Simplified for compatibility
+
+# Data processing (essential for market calendar and data handling)
+pandas
+numpy
+
+# Market calendar (depends on pandas)
+pandas-market-calendars
+
+# Yahoo Finance for metadata
+yfinance
+
+# Polygon API client
+polygon-api-client
+
+# Additional HTTP handling for yfinance
+requests-cache

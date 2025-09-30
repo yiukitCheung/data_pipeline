@@ -38,6 +38,12 @@ batch_layer/
 
 ## 🚀 **Quick Start**
 
+### **⚡ Lambda Layers (Required First Step)**
+```bash
+# Build and publish Lambda Layer with heavy dependencies (pandas, yfinance)
+./deploy.sh dev layer
+```
+
 ### **Production Deployment (Single Command)**
 ```bash
 # Deploy entire batch layer
@@ -68,6 +74,7 @@ batch_layer/
 
 | Command | Description |
 |---------|-------------|
+| `./deploy.sh dev layer` | **Build and publish Lambda Layer (required first)** |
 | `./deploy.sh dev all` | Deploy entire batch layer to dev |
 | `./deploy.sh prod all` | Deploy entire batch layer to production |
 | `./deploy.sh dev fetching` | Deploy only fetching component |
@@ -79,13 +86,53 @@ batch_layer/
 
 ### **Manual Component Building**
 ```bash
-# Build Lambda packages
+# Build Lambda Layer (heavy dependencies)
 cd fetching/deployment_packages
+./build_layer.sh --publish
+
+# Build Lambda packages (lightweight)
 ./build_packages.sh
 
 # Build Docker container
 cd processing/container_images
 ./build_container.sh
+```
+
+## 📦 **Lambda Layers Solution**
+
+### **🎯 Problem Solved**
+AWS Lambda has a **70MB package size limit**, but our dependencies (pandas, yfinance, polygon-api-client) exceed this limit. 
+
+### **✅ Solution: Lambda Layers**
+- **Layer**: Heavy dependencies (pandas, yfinance, polygon-api-client) → ~40-50MB
+- **Function**: Lightweight code only (requests, pydantic, psycopg2) → ~5-10MB
+- **Total**: Under 70MB limit ✅
+
+### **🏗️ Layer Architecture**
+```
+Lambda Layer (40-50MB):
+├── pandas/
+├── numpy/
+├── yfinance/
+├── polygon-api-client/
+└── pandas-market-calendars/
+
+Lambda Function (5-10MB):
+├── daily_ohlcv_fetcher.py
+├── daily_meta_fetcher.py
+├── shared/clients/
+├── shared/models/
+└── lightweight dependencies
+```
+
+### **🔄 Layer Management**
+```bash
+# Build and publish layer
+./deploy.sh dev layer
+
+# The layer ARN will be automatically used by Terraform
+# Add to terraform.tfvars:
+lambda_layer_arns = ["arn:aws:lambda:region:account:layer:condvest-batch-dependencies:1"]
 ```
 
 ## 🏭 **Industrial Benefits**

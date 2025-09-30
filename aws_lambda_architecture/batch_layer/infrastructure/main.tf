@@ -196,5 +196,8 @@ module "fetching" {
   # IAM
   lambda_execution_role_arn = module.shared.lambda_execution_role_arn
 
+  # Lambda Layers
+  lambda_layer_arns = var.lambda_layer_arns
+
   depends_on = [module.shared, module.database, module.processing]
 }
