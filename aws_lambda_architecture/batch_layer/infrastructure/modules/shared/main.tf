@@ -54,7 +54,6 @@ resource "aws_iam_role_policy" "lambda_execution_role" {
           "secretsmanager:GetSecretValue"
         ]
         Resource = [
-          var.rds_secret_arn,
           var.polygon_api_key_secret_arn
         ]
       },
@@ -164,7 +163,7 @@ resource "aws_iam_role_policy" "batch_job_role" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = var.rds_secret_arn
+        Resource = var.polygon_api_key_secret_arn
       },
       {
         Effect = "Allow"

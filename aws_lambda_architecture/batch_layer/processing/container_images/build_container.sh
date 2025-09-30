@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROCESSING_DIR="$(dirname "$SCRIPT_DIR")"
 BATCH_DIR="$(dirname "$PROCESSING_DIR")"
-SHARED_DIR="$(dirname "$BATCH_DIR")/shared"
+SHARED_DIR="$BATCH_DIR/shared"  # Fixed: shared is now in batch_layer/shared
 
 # Default values
 AWS_REGION=${AWS_REGION:-ca-west-1}

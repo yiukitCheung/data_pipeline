@@ -22,11 +22,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY processing/requirements.txt .
+COPY processing/batch_jobs/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy shared modules
-COPY shared/ ./shared/
+# Copy shared modules (copied by build script to processing/shared/)
+COPY processing/shared/ ./shared/
 
 # Copy batch job files
 COPY processing/batch_jobs/ ./

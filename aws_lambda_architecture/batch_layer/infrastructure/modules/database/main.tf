@@ -30,21 +30,7 @@ resource "aws_security_group" "postgres" {
   name_prefix = "${var.name_prefix}-postgres-"
   vpc_id      = var.vpc_id
 
-  ingress {
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = var.lambda_security_group_ids
-    description     = "PostgreSQL access from Lambda"
-  }
-
-  ingress {
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = var.batch_security_group_ids
-    description     = "PostgreSQL access from Batch"
-  }
+  # Note: Security groups will be updated after Lambda and Batch are created
 
   ingress {
     from_port   = 5432
@@ -85,7 +71,10 @@ resource "aws_security_group" "postgres" {
 # Random password for PostgreSQL
 resource "random_password" "postgres_password" {
   length  = 32
-  special = true
+  special = false  # RDS PostgreSQL doesn't allow certain special characters
+  upper   = true
+  lower   = true
+  numeric = true
 }
 
 # Secrets Manager for PostgreSQL credentials
@@ -122,47 +111,55 @@ resource "aws_db_parameter_group" "postgres" {
   parameter {
     name  = "shared_buffers"
     value = "{DBInstanceClassMemory/4}"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "effective_cache_size"
     value = "{DBInstanceClassMemory*3/4}"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "work_mem"
-    value = "64MB"
+    value = "65536"  # 64MB in KB
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "maintenance_work_mem"
-    value = "256MB"
+    value = "262144"  # 256MB in KB
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "checkpoint_completion_target"
     value = "0.9"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "wal_buffers"
-    value = "16MB"
+    value = "16384"  # 16MB in KB
     apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "default_statistics_target"
     value = "100"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "random_page_cost"
     value = "1.1"
+    apply_method = "pending-reboot"
   }
 
   parameter {
     name  = "effective_io_concurrency"
     value = "200"
+    apply_method = "pending-reboot"
   }
 
   parameter {

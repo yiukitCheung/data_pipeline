@@ -29,12 +29,12 @@ output "batch_job_queue_arn" {
 
 output "batch_job_definition_name" {
   description = "Name of the Batch job definition"
-  value       = aws_batch_job_definition.fibonacci_resampling.name
+  value       = aws_batch_job_definition.fibonacci_resampler.name
 }
 
 output "batch_job_definition_arn" {
   description = "ARN of the Batch job definition"
-  value       = aws_batch_job_definition.fibonacci_resampling.arn
+  value       = aws_batch_job_definition.fibonacci_resampler.arn
 }
 
 output "daily_resampling_rule_arn" {
@@ -44,5 +44,5 @@ output "daily_resampling_rule_arn" {
 
 output "batch_log_group_name" {
   description = "CloudWatch log group name for Batch jobs"
-  value       = aws_cloudwatch_log_group.batch_logs.name
+  value       = aws_cloudwatch_log_group.batch_jobs.name
 }

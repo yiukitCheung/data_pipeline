@@ -77,8 +77,7 @@ module "shared" {
   vpc_id         = data.aws_vpc.main.id
   vpc_cidr_block = data.aws_vpc.main.cidr_block
 
-  # Secrets (will be created by database module)
-  rds_secret_arn             = module.database.postgres_secret_arn
+  # External APIs (no circular dependency)
   polygon_api_key_secret_arn = var.polygon_api_key_secret_arn
 }
 
@@ -93,11 +92,9 @@ module "database" {
   common_tags   = local.common_tags
 
   # Networking
-  vpc_id                     = data.aws_vpc.main.id
-  vpc_cidr_block            = data.aws_vpc.main.cidr_block
-  subnet_ids                = data.aws_subnets.private.ids
-  lambda_security_group_ids = [module.shared.lambda_security_group_id]
-  batch_security_group_ids  = [module.shared.batch_security_group_id]
+  vpc_id          = data.aws_vpc.main.id
+  vpc_cidr_block  = data.aws_vpc.main.cidr_block
+  subnet_ids      = data.aws_subnets.private.ids
 
   # Database configuration
   database_name           = var.database_name
@@ -113,6 +110,8 @@ module "database" {
   # Security
   deletion_protection = var.deletion_protection
   skip_final_snapshot = var.skip_final_snapshot
+
+  depends_on = [module.shared]
 }
 
 # ===============================================
@@ -128,6 +127,7 @@ module "processing" {
 
   # Networking
   subnet_ids               = data.aws_subnets.private.ids
+  private_subnet_ids       = data.aws_subnets.private.ids
   batch_security_group_id  = module.shared.batch_security_group_id
 
   # Batch configuration
@@ -137,10 +137,10 @@ module "processing" {
   fibonacci_intervals  = var.fibonacci_intervals
   log_retention_days   = var.cloudwatch_log_retention_days
 
-  # Database configuration
-  rds_secret_arn = module.database.postgres_secret_arn
-  database_name  = var.database_name
-  rds_endpoint   = module.database.postgres_endpoint
+  # Database configuration (will be updated after database is created)
+  database_name                 = var.database_name
+  database_port                 = 5432
+  cloudwatch_log_group_name     = "${local.name_prefix}-batch-logs"
 
   # Scheduling
   resampling_schedule_expression = var.daily_schedule_expression
@@ -150,6 +150,7 @@ module "processing" {
   batch_execution_role_arn  = module.shared.batch_execution_role_arn
   batch_job_role_arn        = module.shared.batch_job_role_arn
   eventbridge_role_arn      = module.shared.eventbridge_role_arn
+  lambda_execution_role_arn = module.shared.lambda_execution_role_arn
 
   depends_on = [module.shared, module.database]
 }
@@ -174,10 +175,8 @@ module "fetching" {
   subnet_ids               = data.aws_subnets.private.ids
   lambda_security_group_id = module.shared.lambda_security_group_id
 
-  # Database configuration
-  rds_secret_arn = module.database.postgres_secret_arn
-  database_name  = var.database_name
-  rds_endpoint   = module.database.postgres_endpoint
+  # Database configuration (will be updated after database is created)
+  database_name = var.database_name
 
   # External APIs
   polygon_api_key_secret_arn = var.polygon_api_key_secret_arn

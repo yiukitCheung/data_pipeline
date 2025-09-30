@@ -58,9 +58,7 @@ resource "aws_lambda_function" "daily_ohlcv_fetcher" {
   # Environment variables
   environment {
     variables = {
-      RDS_SECRET_ARN                      = var.rds_secret_arn
       DATABASE_NAME                       = var.database_name
-      RDS_ENDPOINT                        = var.rds_endpoint
       RDS_PORT                           = "5432"
       POLYGON_API_KEY_SECRET_ARN         = var.polygon_api_key_secret_arn
       BATCH_JOB_QUEUE                    = var.batch_job_queue_name
@@ -105,9 +103,7 @@ resource "aws_lambda_function" "daily_meta_fetcher" {
   # Environment variables
   environment {
     variables = {
-      RDS_SECRET_ARN             = var.rds_secret_arn
       DATABASE_NAME              = var.database_name
-      RDS_ENDPOINT               = var.rds_endpoint
       RDS_PORT                   = "5432"
       POLYGON_API_KEY_SECRET_ARN = var.polygon_api_key_secret_arn
       BATCH_SIZE                 = "20"  # Smaller batches for metadata

@@ -55,18 +55,8 @@ variable "lambda_security_group_id" {
 }
 
 # Database Configuration
-variable "rds_secret_arn" {
-  description = "ARN of the RDS credentials secret"
-  type        = string
-}
-
 variable "database_name" {
   description = "Database name"
-  type        = string
-}
-
-variable "rds_endpoint" {
-  description = "RDS endpoint"
   type        = string
 }
 

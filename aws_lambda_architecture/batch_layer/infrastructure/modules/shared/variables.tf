@@ -35,11 +35,6 @@ variable "vpc_cidr_block" {
 }
 
 # Secrets
-variable "rds_secret_arn" {
-  description = "ARN of the RDS credentials secret"
-  type        = string
-}
-
 variable "polygon_api_key_secret_arn" {
   description = "ARN of the Polygon API key secret"
   type        = string

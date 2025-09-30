@@ -13,7 +13,7 @@ db_max_allocated_storage = 100
 
 # Batch Configuration
 batch_max_vcpus = 4
-fibonacci_intervals = [3, 5, 8, 13, 21, 34]
+fibonacci_intervals = "3,5,8,13,21,34"
 
 # Monitoring
 enable_cost_monitoring = true

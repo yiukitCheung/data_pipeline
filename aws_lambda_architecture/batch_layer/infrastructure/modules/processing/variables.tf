@@ -29,6 +29,11 @@ variable "subnet_ids" {
   type        = list(string)
 }
 
+variable "private_subnet_ids" {
+  description = "List of private subnet IDs for Batch compute environment"
+  type        = list(string)
+}
+
 variable "batch_security_group_id" {
   description = "Security group ID for Batch compute environment"
   type        = string
@@ -66,18 +71,19 @@ variable "log_retention_days" {
 }
 
 # Database Configuration
-variable "rds_secret_arn" {
-  description = "ARN of the RDS credentials secret"
-  type        = string
-}
-
 variable "database_name" {
   description = "Database name"
   type        = string
 }
 
-variable "rds_endpoint" {
-  description = "RDS endpoint"
+variable "database_port" {
+  description = "Database port"
+  type        = number
+  default     = 5432
+}
+
+variable "cloudwatch_log_group_name" {
+  description = "CloudWatch log group name"
   type        = string
 }
 
@@ -106,5 +112,10 @@ variable "batch_job_role_arn" {
 
 variable "eventbridge_role_arn" {
   description = "ARN of the EventBridge role for triggering Batch jobs"
+  type        = string
+}
+
+variable "lambda_execution_role_arn" {
+  description = "ARN of the Lambda execution role"
   type        = string
 }

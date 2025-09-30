@@ -1,43 +1,45 @@
 #!/bin/bash
-# Industrial Terraform Deployment Script for Batch Layer
-# Supports both modular and component-based deployment
+# Batch Layer Deployment Script
+# Usage: ./deploy.sh [environment] [component]
 
 set -e
 
+# Default values
 ENVIRONMENT=${1:-dev}
 COMPONENT=${2:-all}
 
-echo "🚀 Deploying Batch Layer - Environment: $ENVIRONMENT, Component: $COMPONENT"
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-# Function to deploy a specific component
-deploy_component() {
-    local component=$1
-    echo "📦 Deploying $component component..."
-    
-    if [ -d "$component/terraform" ]; then
-        cd "$component/terraform"
-        terraform init
-        terraform plan -var="environment=$ENVIRONMENT"
-        terraform apply -var="environment=$ENVIRONMENT" -auto-approve
-        cd ../..
-    else
-        echo "❌ Component $component terraform not found"
-        exit 1
-    fi
-}
-
-# Function to deploy all via main infrastructure
+# Function to deploy entire batch layer
 deploy_all() {
     echo "🏗️ Deploying entire batch layer..."
+    
+    # First, deploy infrastructure (creates ECR repository)
+    echo "🏗️ Deploying infrastructure..."
     cd infrastructure
     terraform init
     terraform plan -var="environment=$ENVIRONMENT"
     terraform apply -var="environment=$ENVIRONMENT" -auto-approve
     cd ..
+    
+    # Then, build and push container (now that ECR exists)
+    echo "🐳 Building and pushing container..."
+    if [ -f "processing/container_images/build_container.sh" ]; then
+        cd processing/container_images
+        ./build_container.sh
+        cd ../..
+    fi
 }
 
 # Function to build deployment artifacts first
 build_artifacts() {
+    local skip_ecr_push=${1:-false}
+    
     echo "📦 Building deployment artifacts..."
     
     # Build Lambda Layer first (contains heavy dependencies)
@@ -56,24 +58,42 @@ build_artifacts() {
         cd ../..
     fi
     
-    # Build container images
+    # Build container images (but only push to ECR if not skipping)
     if [ -f "processing/container_images/build_container.sh" ]; then
         echo "🐳 Building container images..."
         cd processing/container_images
-        ./build_container.sh
+        if [ "$skip_ecr_push" = "true" ]; then
+            # Build only, don't push to ECR
+            echo "🔧 Building container (skipping ECR push)..."
+            docker build \
+                -f "$(pwd)/Dockerfile" \
+                -t "dev-batch-fibonacci-resampler:latest" \
+                --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+                --build-arg VCS_REF="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')" \
+                "$(dirname "$(pwd)")/.."
+        else
+            # Build and push to ECR
+            ./build_container.sh
+        fi
         cd ../..
     fi
+}
+
+# Function to deploy specific component
+deploy_component() {
+    local component=$1
+    echo "🚀 Deploying $component component..."
+    
+    cd infrastructure
+    terraform init
+    terraform plan -var="environment=$ENVIRONMENT" -target="module.$component"
+    terraform apply -var="environment=$ENVIRONMENT" -target="module.$component" -auto-approve
+    cd ..
 }
 
 # Function to validate prerequisites
 validate_prerequisites() {
     echo "🔍 Validating prerequisites..."
-    
-    # Check AWS CLI
-    if ! command -v aws &> /dev/null; then
-        echo "❌ AWS CLI not found. Please install AWS CLI."
-        exit 1
-    fi
     
     # Check Terraform
     if ! command -v terraform &> /dev/null; then
@@ -108,19 +128,36 @@ show_summary() {
     echo "Timestamp: $(date)"
     
     if [ "$COMPONENT" = "all" ]; then
-        cd infrastructure
         echo ""
-        echo "📊 Infrastructure Outputs:"
-        terraform output
-        cd ..
+        echo "📋 Deployed Components:"
+        echo "  ✅ Infrastructure (RDS, ECR, Lambda, Batch, EventBridge)"
+        echo "  ✅ Fetching (Lambda functions with layers)"
+        echo "  ✅ Processing (Container image in ECR)"
+        echo "  ✅ Database (PostgreSQL with schema)"
+        echo ""
+        echo "🔗 Next Steps:"
+        echo "  1. Test Lambda functions in AWS Console"
+        echo "  2. Check container in ECR repository"
+        echo "  3. Verify database connection"
+        echo "  4. Monitor EventBridge schedules"
+    else
+        echo ""
+        echo "📋 Deployed Component: $COMPONENT"
+        echo ""
+        echo "🔗 Next Steps:"
+        echo "  1. Check component in AWS Console"
+        echo "  2. Test functionality"
+        echo "  3. Monitor logs"
     fi
 }
 
-# Main deployment logic
+# Main execution
+echo "🚀 Deploying Batch Layer - Environment: $ENVIRONMENT, Component: $COMPONENT"
+
 case $COMPONENT in
     "all")
         validate_prerequisites
-        build_artifacts
+        build_artifacts true  # Skip ECR push during build
         deploy_all
         show_summary
         ;;
@@ -171,19 +208,19 @@ case $COMPONENT in
         ;;
     "destroy")
         echo "💥 Destroying infrastructure..."
-        read -p "Are you sure you want to destroy $ENVIRONMENT environment? (yes/no): " confirm
+        read -p "Are you sure you want to destroy all resources? (yes/no): " confirm
         if [ "$confirm" = "yes" ]; then
             cd infrastructure
             terraform destroy -var="environment=$ENVIRONMENT" -auto-approve
             cd ..
         else
-            echo "Aborted."
+            echo "❌ Destruction cancelled."
         fi
         ;;
     *)
         echo "❌ Invalid component: $COMPONENT"
         echo ""
-        echo "Usage: $0 [environment] [component]"
+        echo "Usage: ./deploy.sh [environment] [component]"
         echo ""
         echo "Environments: dev, staging, prod"
         echo "Components:"
@@ -198,9 +235,9 @@ case $COMPONENT in
         echo "  destroy    - Destroy infrastructure"
         echo ""
         echo "Examples:"
-        echo "  $0 dev all                    # Deploy everything to dev"
-        echo "  $0 prod fetching             # Deploy only fetching to prod"
-        echo "  $0 dev build                 # Build artifacts only"
+        echo "  ./deploy.sh dev all                    # Deploy everything to dev"
+        echo "  ./deploy.sh prod fetching             # Deploy only fetching to prod"
+        echo "  ./deploy.sh dev build                 # Build artifacts only"
         exit 1
         ;;
 esac
