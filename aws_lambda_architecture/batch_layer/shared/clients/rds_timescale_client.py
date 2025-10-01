@@ -77,15 +77,9 @@ class RDSTimescaleClient:
             )
             self.connection.autocommit = True
             
-            # Verify TimescaleDB extension
-            with self.connection.cursor() as cursor:
-                cursor.execute("SELECT extname FROM pg_extension WHERE extname = 'timescaledb';")
-                result = cursor.fetchone()
-                if not result:
-                    logger.warning("TimescaleDB extension not found - creating it")
-                    cursor.execute("CREATE EXTENSION IF NOT EXISTS timescaledb;")
-            
-            logger.info("Connected to RDS PostgreSQL + TimescaleDB")
+            # Note: AWS RDS PostgreSQL doesn't support TimescaleDB extension
+            # Using regular PostgreSQL with time-series optimized tables instead
+            logger.info("Connected to RDS PostgreSQL (TimescaleDB not available on RDS)")
             
         except Exception as e:
             logger.error(f"Error connecting to RDS TimescaleDB: {str(e)}")

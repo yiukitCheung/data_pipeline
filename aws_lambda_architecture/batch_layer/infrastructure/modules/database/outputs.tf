@@ -47,3 +47,15 @@ output "postgres_instance_id" {
   description = "RDS instance identifier"
   value       = aws_db_instance.postgres.id
 }
+
+# Additional outputs for database initialization
+output "rds_endpoint" {
+  description = "RDS database endpoint"
+  value       = aws_db_instance.postgres.address
+}
+
+output "rds_password" {
+  description = "RDS database password"
+  value       = random_password.postgres_password.result
+  sensitive   = true
+}

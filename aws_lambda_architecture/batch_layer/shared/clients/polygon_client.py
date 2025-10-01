@@ -14,13 +14,13 @@ import re
 from botocore.client import Config
 from concurrent import futures
 import os
-from dotenv import load_dotenv
+# from dotenv import load_dotenv  # Not needed in Lambda
 
 from ..models.data_models import OHLCVData
 
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+# load_dotenv()  # Not needed in Lambda - uses environment variables directly
 
 
 class PolygonClient:

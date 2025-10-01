@@ -12,9 +12,7 @@ from typing import Dict, Any, List
 import os
 from decimal import Decimal
 
-# Import shared utilities (we'll create these)
-import sys
-sys.path.append('/opt/python')  # Lambda layer path
+# Import shared utilities (included in deployment package)
 from shared.clients.polygon_client import PolygonClient
 from shared.clients.rds_timescale_client import RDSTimescaleClient
 from shared.models.data_models import OHLCVData, BatchProcessingJob
@@ -36,8 +34,15 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
     
     try:
+        # Get Polygon API key from Secrets Manager
+        secrets_client = boto3.client('secretsmanager')
+        polygon_secret = secrets_client.get_secret_value(
+            SecretId=os.environ['POLYGON_API_KEY_SECRET_ARN']
+        )
+        polygon_api_key = json.loads(polygon_secret['SecretString'])['POLYGON_API_KEY']
+        
         # Initialize clients
-        polygon_client = PolygonClient(api_key=os.environ['POLYGON_API_KEY'])
+        polygon_client = PolygonClient(api_key=polygon_api_key)
         rds_client = RDSTimescaleClient(
             secret_arn=os.environ['RDS_SECRET_ARN']
         ) 
@@ -104,7 +109,6 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                     logger.info(f"Inserted {records_inserted} records for batch")
                 else:
                     logger.warning(f"No data returned for batch: {batch_symbols}")
-                        `   ```
             except Exception as e:  
                 logger.error(f"Error processing batch {batch_symbols}: {str(e)}")
                 # Continue with next batch rather than failing entire job

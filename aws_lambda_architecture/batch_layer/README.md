@@ -1,255 +1,252 @@
-# Batch Layer - Modular Architecture
+# Batch Layer - Manual AWS Deployment
 
-## 🏗️ **Architecture Overview**
+This directory contains the application code for the batch processing layer. **Terraform infrastructure has been removed** - you will deploy AWS services manually via AWS Console or CLI.
 
-The batch layer is now structured using a **hybrid modular approach** for industrial-grade deployment and testing:
+## 📁 Directory Structure
 
 ```
 batch_layer/
-├── infrastructure/              # 🎯 Main Terraform (Production)
-│   ├── main.tf                 # Orchestrates all modules
-│   ├── variables.tf
-│   ├── terraform.tfvars
-│   └── modules/                # Terraform modules
-│       ├── fetching/
-│       ├── processing/
-│       ├── database/
-│       └── shared/
-├── fetching/                   # 📥 Data Fetching Component
-│   ├── lambda_functions/
-│   ├── deployment_packages/
-│   ├── terraform/              # For testing only
-│   └── requirements.txt
-├── processing/                 # ⚙️ Data Processing Component
-│   ├── batch_jobs/
-│   ├── container_images/
-│   ├── terraform/              # For testing only
-│   └── requirements.txt
-├── database/                   # 🗄️ Database Component
-│   ├── schemas/
-│   ├── terraform/              # For testing only
-│   └── migrations/
-├── shared/                     # 🔄 Shared Resources
-│   ├── clients/
-│   ├── models/
-│   └── utils/
-└── deploy.sh                   # 🚀 Main deployment script
+├── database/              # Database schemas and migrations
+│   ├── schemas/          # PostgreSQL/TimescaleDB table definitions
+│   └── migrations/       # Database migration scripts
+│
+├── fetching/             # Lambda functions for data fetching
+│   ├── lambda_functions/ # Lambda function code
+│   │   ├── daily_ohlcv_fetcher.py
+│   │   └── daily_meta_fetcher.py
+│   └── deployment_packages/  # Deployment artifacts
+│       ├── build_layer.sh         # Build Lambda Layer
+│       ├── build_packages.sh      # Build Lambda ZIP packages
+│       └── layer_requirements.txt # Lambda Layer dependencies
+│
+├── processing/           # AWS Batch processing jobs
+│   ├── batch_jobs/      # Batch job Python scripts
+│   │   └── resampler.py
+│   └── container_images/ # Docker images for Batch
+│       ├── Dockerfile
+│       ├── build_container.sh
+│       └── requirements.txt
+│
+├── shared/              # Shared utilities and clients
+│   ├── clients/        # Database and API clients
+│   ├── models/         # Data models
+│   └── utils/          # Utility functions
+│
+└── local_dev/          # Local development/testing
+    ├── docker-compose.yml
+    └── local_resampler.sh
 ```
 
-## 🚀 **Quick Start**
+## 🚀 Manual Deployment Guide
 
-### **⚡ Lambda Layers (Required First Step)**
+### Prerequisites
+- AWS Account with appropriate permissions
+- AWS CLI configured
+- Docker installed (for Batch jobs and Lambda layers)
+- Python 3.11
+
+---
+
+### Step 1: Create RDS PostgreSQL Database
+
+**Via AWS Console:**
+1. Go to RDS → Create Database
+2. Choose PostgreSQL (version 15+)
+3. Configure:
+   - Instance: `db.t3.micro` (or as needed)
+   - Database name: `condvest`
+   - Master username: Choose your username
+   - Enable VPC access
+4. Note the endpoint and credentials
+
+**Initialize Database:**
 ```bash
-# Build and publish Lambda Layer with heavy dependencies (pandas, yfinance)
-./deploy.sh dev layer
+# Connect to your RDS instance
+psql -h <your-rds-endpoint> -U <username> -d condvest
+
+# Run the schema
+\i database/schemas/schema_init_postgres.sql
 ```
 
-### **Production Deployment (Single Command)**
-```bash
-# Deploy entire batch layer
-./deploy.sh dev all
+---
 
-# Deploy to production
-./deploy.sh prod all
+### Step 2: Create Secrets in AWS Secrets Manager
+
+**Polygon API Key:**
+```bash
+aws secretsmanager create-secret \
+  --name prod/Condvest/PolygonAPI \
+  --secret-string '{"api_key":"YOUR_POLYGON_API_KEY"}' \
+  --region ca-west-1
 ```
 
-### **Component Development & Testing**
+**RDS Credentials:**
 ```bash
-# Test only the fetching component
-./deploy.sh dev fetching
-
-# Test only the processing component  
-./deploy.sh dev processing
-
-# Build artifacts without deploying
-./deploy.sh dev build
+aws secretsmanager create-secret \
+  --name prod/Condvest/RDS-Credentials \
+  --secret-string '{"username":"YOUR_DB_USER","password":"YOUR_DB_PASSWORD","host":"YOUR_RDS_ENDPOINT","port":"5432","dbname":"condvest"}' \
+  --region ca-west-1
 ```
 
-## 📋 **Deployment Commands**
+---
 
-### **Main Commands**
+### Step 3: Build and Deploy Lambda Layer
+
+**Build the Lambda Layer (with Linux binaries):**
 ```bash
-./deploy.sh [environment] [component]
-```
-
-| Command | Description |
-|---------|-------------|
-| `./deploy.sh dev layer` | **Build and publish Lambda Layer (required first)** |
-| `./deploy.sh dev all` | Deploy entire batch layer to dev |
-| `./deploy.sh prod all` | Deploy entire batch layer to production |
-| `./deploy.sh dev fetching` | Deploy only fetching component |
-| `./deploy.sh dev processing` | Deploy only processing component |
-| `./deploy.sh dev build` | Build all deployment artifacts |
-| `./deploy.sh dev init` | Initialize Terraform |
-| `./deploy.sh dev plan` | Plan infrastructure changes |
-| `./deploy.sh dev destroy` | Destroy infrastructure |
-
-### **Manual Component Building**
-```bash
-# Build Lambda Layer (heavy dependencies)
 cd fetching/deployment_packages
 ./build_layer.sh --publish
+```
 
-# Build Lambda packages (lightweight)
+This will:
+- Install dependencies (pandas, numpy, yfinance, polygon, etc.) for Linux
+- Package shared modules
+- Create a ZIP file
+- Publish to AWS Lambda Layer
+
+**Note the Layer ARN** - you'll need it for Lambda functions.
+
+---
+
+### Step 4: Build and Deploy Lambda Functions
+
+**Build Lambda packages:**
+```bash
+cd fetching/deployment_packages
 ./build_packages.sh
+```
 
-# Build Docker container
+**Deploy via AWS Console:**
+1. Go to Lambda → Create Function
+2. Create `daily-ohlcv-fetcher`:
+   - Runtime: Python 3.11
+   - Upload `daily_ohlcv_fetcher.zip`
+   - Add the Lambda Layer (from Step 3)
+   - Set environment variables:
+     - `POLYGON_API_KEY_SECRET_ARN`
+     - `RDS_SECRET_ARN`
+     - `DATABASE_NAME=condvest`
+   - Configure VPC (same as RDS)
+   - Set timeout: 300 seconds
+   - Set memory: 512 MB
+
+3. Repeat for `daily-meta-fetcher`
+
+**Or deploy via AWS CLI:**
+```bash
+aws lambda create-function \
+  --function-name daily-ohlcv-fetcher \
+  --runtime python3.11 \
+  --role <your-lambda-execution-role-arn> \
+  --handler daily_ohlcv_fetcher.lambda_handler \
+  --zip-file fileb://deployment_packages/daily_ohlcv_fetcher.zip \
+  --layers <your-layer-arn> \
+  --timeout 300 \
+  --memory-size 512 \
+  --environment Variables="{POLYGON_API_KEY_SECRET_ARN=<arn>,RDS_SECRET_ARN=<arn>,DATABASE_NAME=condvest}" \
+  --region ca-west-1
+```
+
+---
+
+### Step 5: Create IAM Role for Lambda
+
+**Lambda Execution Role needs:**
+- `AWSLambdaVPCAccessExecutionRole` (for VPC access)
+- Custom policy to access Secrets Manager:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": [
+        "arn:aws:secretsmanager:ca-west-1:*:secret:prod/Condvest/*"
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### Step 6: Build and Deploy AWS Batch Job
+
+**Build Docker container:**
+```bash
 cd processing/container_images
 ./build_container.sh
 ```
 
-## 📦 **Lambda Layers Solution**
+This will:
+- Build Docker image with all dependencies
+- Push to Amazon ECR
 
-### **🎯 Problem Solved**
-AWS Lambda has a **70MB package size limit**, but our dependencies (pandas, yfinance, polygon-api-client) exceed this limit. 
+**Create Batch Compute Environment, Job Queue, and Job Definition via Console:**
+1. ECR → Create repository: `condvest-batch-resampler`
+2. Batch → Compute Environments → Create
+3. Batch → Job Queues → Create (attach compute environment)
+4. Batch → Job Definitions → Create:
+   - Type: Fargate
+   - Image: Your ECR image URI
+   - vCPUs: 2
+   - Memory: 4096 MB
+   - Environment variables: Same as Lambda
 
-### **✅ Solution: Lambda Layers**
-- **Layer**: Heavy dependencies (pandas, yfinance, polygon-api-client) → ~40-50MB
-- **Function**: Lightweight code only (requests, pydantic, psycopg2) → ~5-10MB
-- **Total**: Under 70MB limit ✅
+---
 
-### **🏗️ Layer Architecture**
-```
-Lambda Layer (40-50MB):
-├── pandas/
-├── numpy/
-├── yfinance/
-├── polygon-api-client/
-└── pandas-market-calendars/
+### Step 7: Schedule Lambda Functions with EventBridge
 
-Lambda Function (5-10MB):
-├── daily_ohlcv_fetcher.py
-├── daily_meta_fetcher.py
-├── shared/clients/
-├── shared/models/
-└── lightweight dependencies
-```
-
-### **🔄 Layer Management**
+**Create EventBridge Rules:**
 ```bash
-# Build and publish layer
-./deploy.sh dev layer
+# Daily OHLCV fetch (4:05 PM EST = 9:05 PM UTC)
+aws events put-rule \
+  --name daily-ohlcv-fetch \
+  --schedule-expression "cron(5 21 * * ? *)" \
+  --region ca-west-1
 
-# The layer ARN will be automatically used by Terraform
-# Add to terraform.tfvars:
-lambda_layer_arns = ["arn:aws:lambda:region:account:layer:condvest-batch-dependencies:1"]
+aws events put-targets \
+  --rule daily-ohlcv-fetch \
+  --targets "Id"="1","Arn"="<your-lambda-arn>" \
+  --region ca-west-1
 ```
 
-## 🏭 **Industrial Benefits**
+---
 
-### ✅ **Production Advantages**
-- **Single Command Deployment**: `./deploy.sh prod all`
-- **Consistent Infrastructure**: All modules deployed together
-- **Dependency Management**: Terraform handles module dependencies
-- **State Management**: Single state file for production
+## 🧪 Local Testing
 
-### ✅ **Development Advantages**
-- **Component Isolation**: Test individual components
-- **Fast Iteration**: Deploy only what changed
-- **Independent Testing**: Each component has its own Terraform
-- **Parallel Development**: Teams can work on different components
-
-### ✅ **Enterprise Features**
-- **Terraform Modules**: Reusable across environments
-- **Version Control**: Each component can be versioned
-- **CI/CD Ready**: Scripts work in automation pipelines
-- **Cost Optimization**: Deploy only what you need for testing
-
-## 📊 **Component Details**
-
-### **Fetching Component**
-- **Purpose**: Fetch daily OHLCV and metadata from external APIs
-- **Technology**: AWS Lambda (Python)
-- **Scheduling**: EventBridge cron expressions
-- **Output**: Data stored in PostgreSQL
-
-### **Processing Component**
-- **Purpose**: Resample data using Fibonacci intervals (3-34 days)
-- **Technology**: AWS Batch + Fargate Spot (70% cost savings)
-- **Trigger**: Automated after data fetching
-- **Output**: Resampled data for backtesting
-
-### **Database Component**
-- **Purpose**: PostgreSQL optimized for time-series data
-- **Technology**: RDS PostgreSQL with custom parameter group
-- **Features**: Automated backups, monitoring, security groups
-
-### **Shared Component**
-- **Purpose**: Common IAM roles, security groups, utilities
-- **Technology**: Terraform modules
-- **Benefits**: DRY principle, centralized security
-
-## 🔄 **Terraform State Management**
-
-### **Production State**
-```hcl
-# Single state file for production
-backend "s3" {
-  bucket = "condvest-terraform-state"
-  key    = "batch-layer/terraform.tfstate"
-  region = "ca-west-1"
-}
-```
-
-### **Component Testing States**
-```hcl
-# Separate state files for testing
-backend "s3" {
-  bucket = "condvest-terraform-state"
-  key    = "batch-layer/components/fetching/terraform.tfstate"
-  region = "ca-west-1"
-}
-```
-
-## 🛠️ **Development Workflow**
-
-### **1. Component Development**
+**Test with local PostgreSQL:**
 ```bash
-# Work on fetching component
-cd fetching/
-# Make changes to lambda_functions/
-./deployment_packages/build_packages.sh
-./terraform/
-terraform apply
+cd local_dev
+docker-compose up -d
+python local_resampler.py
 ```
 
-### **2. Integration Testing**
-```bash
-# Test all components together
-./deploy.sh dev all
-```
+---
 
-### **3. Production Deployment**
-```bash
-# Deploy to production
-./deploy.sh prod all
-```
+## 📝 Notes
 
-## 📈 **Monitoring & Costs**
+- All Terraform infrastructure has been removed for manual deployment
+- You have full control over AWS resource configuration
+- Estimated costs (with minimal usage):
+  - RDS db.t3.micro: ~$15/month
+  - Lambda: Free tier covers most usage
+  - Batch (Fargate Spot): $0.01-0.10/job
 
-### **Cost Optimization**
-- **Fargate Spot**: 70% savings on batch processing
-- **Component-based testing**: Deploy only what's needed
-- **Scheduled scaling**: Resources scale to zero when not needed
+---
 
-### **Monitoring**
-- **CloudWatch Logs**: Centralized logging for all components
-- **Terraform Outputs**: Key ARNs and endpoints
-- **Cost Tags**: All resources tagged for cost tracking
+## 🔧 Build Scripts
 
-## 🔧 **Prerequisites**
+- `fetching/deployment_packages/build_layer.sh` - Build Lambda Layer
+- `fetching/deployment_packages/build_packages.sh` - Build Lambda deployment packages
+- `processing/container_images/build_container.sh` - Build Batch Docker container
 
-- AWS CLI configured
-- Terraform >= 1.5.0
-- Docker (for processing component)
-- Python 3.11+ (for Lambda functions)
+---
 
-## 🎯 **Next Steps**
+## 📚 Resources
 
-This modular structure provides the foundation for:
-1. **Speed Layer**: Real-time processing components
-2. **Serving Layer**: API and query interfaces  
-3. **Multi-Environment**: Dev/Staging/Prod separation
-4. **Team Scaling**: Multiple teams working on different components
-
-The architecture follows industrial best practices used by Netflix, Airbnb, and other tech giants! 🚀
+- [AWS Lambda Layers](https://docs.aws.amazon.com/lambda/latest/dg/configuration-layers.html)
+- [AWS Batch](https://docs.aws.amazon.com/batch/latest/userguide/what-is-batch.html)
+- [RDS PostgreSQL](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html)
+- [EventBridge Scheduling](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-rule-schedule.html)

@@ -200,3 +200,26 @@ module "fetching" {
 
   depends_on = [module.shared, module.database, module.processing]
 }
+
+# ===============================================
+# Database Initialization Module
+# ===============================================
+module "database_init" {
+  source = "../database/terraform"
+
+  name_prefix   = local.name_prefix
+  environment   = var.environment
+  common_tags   = local.common_tags
+
+  # Database configuration
+  database_host     = module.database.rds_endpoint
+  database_port     = 5432
+  database_name     = var.database_name
+  database_user     = "postgres"
+  database_password = module.database.rds_password
+
+  # IAM role
+  lambda_execution_role_arn = module.shared.lambda_execution_role_arn
+
+  depends_on = [module.database]
+}
