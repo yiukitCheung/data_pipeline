@@ -22,9 +22,9 @@ class RDSTimescaleClient:
     """Client for RDS PostgreSQL + TimescaleDB database operations"""
     
     def __init__(self, endpoint: str = None, port: str = None, 
-                 username: str = None, password: str = None, 
-                 database: str = None, secret_arn: str = None):
-        """
+                    username: str = None, password: str = None, 
+                    database: str = None, secret_arn: str = None):
+        """s
         Initialize RDS TimescaleDB client
         
         Can use either direct credentials or AWS Secrets Manager
@@ -180,7 +180,7 @@ class RDSTimescaleClient:
         sql = """
         INSERT INTO symbol_metadata (
             symbol, name, market, locale, active, 
-            primary_exchange, type, marketcap, sector, industry
+            primary_exchange, type, marketcap, industry, description
         )
         VALUES %s
         ON CONFLICT (symbol)
@@ -192,8 +192,8 @@ class RDSTimescaleClient:
             primary_exchange = EXCLUDED.primary_exchange,
             type = EXCLUDED.type,
             marketcap = EXCLUDED.marketcap,
-            sector = EXCLUDED.sector,
-            industry = EXCLUDED.industry
+            industry = EXCLUDED.industry,
+            description = EXCLUDED.description
         """
         
         try:
@@ -209,8 +209,8 @@ class RDSTimescaleClient:
                     meta.get('primary_exchange'),
                     meta.get('type'),
                     meta.get('marketCap', 0),
-                    meta.get('sector'),
-                    meta.get('industry')
+                    meta.get('industry'),
+                    meta.get('description')
                 ))
             
             # Use psycopg2.extras.execute_values for high-performance bulk insert

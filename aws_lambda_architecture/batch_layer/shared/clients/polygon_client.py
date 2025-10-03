@@ -83,24 +83,22 @@ class PolygonClient:
             Dictionary containing symbol metadata or None if not found
         """
         try:
-            params = {
-                'ticker': symbol,
-                'apiKey': self.api_key,
-            }
+            url = f"https://api.polygon.io/v3/reference/tickers/{symbol}"
+            params = {'apiKey': self.api_key}
 
-            url = "https://api.polygon.io/v3/reference/tickers/"
             response = requests.get(url, params=params)
 
             if response.status_code != 200:
-                logger.error(f"API request failed with status code {response.status_code}")
+                print(f"❌ API request failed with status code {response.status_code}")
                 return None
 
             response_json = response.json()
-            return response_json['results'][0] if response_json.get('results') else None
-            
+            return response_json.get('results', None)
+
         except Exception as e:
-            logger.error(f"Error fetching metadata for {symbol}: {e}")
+            print(f"❌ Error fetching metadata for {symbol}: {e}")
             return None
+
     
     def fetch_ohlcv_data(
         self, 
@@ -159,37 +157,7 @@ class PolygonClient:
         except Exception as e:
             logger.error(f"Error fetching OHLCV data for {symbol} on {target_date}: {e}")
             return None
-    
-    def fetch_ticker_ohlcv(self, symbol: str, start_date: str, end_date: str) -> Optional[List[Dict]]:
-        """
-        Fetch OHLCV data for a date range (compatible with existing code)
         
-        Args:
-            symbol: Stock symbol
-            start_date: Start date in YYYY-MM-DD format
-            end_date: End date in YYYY-MM-DD format
-            
-        Returns:
-            List of OHLCV data dictionaries or None if error
-        """
-        try:
-            params = {
-                'multiplier': 1,
-                'timespan': 'day',
-                'adjusted': False,
-                'sort': 'asc',
-                'apiKey': self.api_key
-            }
-            url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}"
-            response = requests.get(url, params=params)
-            response_json = response.json()
-            
-            return response_json.get('results', [])
-        
-        except Exception as e:
-            logger.error(f"Error fetching OHLCV data for {symbol}: {e}")
-            return None
-    
     def fetch_batch_ohlcv_data(
         self, 
         symbols: List[str], 
@@ -352,23 +320,25 @@ class PolygonAWS_S3Client:
                 yield key, result
 
 if __name__ == "__main__":
-    client = PolygonAWS_S3Client(
-        aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
-        aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
-        endpoint_url=os.environ['AWS_ENDPOINT_URL'],
-        bucket_name=os.environ['AWS_BUCKET_NAME'],
-        local_path=os.environ['LOCAL_PATH']
-    )
-    # Download daily aggregates (OHLCV data)
-    for key, result in client.dl('day'):
-        if result is True:
-            print(f"✅ Downloaded: {key[0]}")
-        else:
-            print(f"❌ Error downloading {key[0]}: {result}")
+    # client = PolygonAWS_S3Client(
+    #     aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+    #     aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+    #     endpoint_url=os.environ['AWS_ENDPOINT_URL'],
+    #     bucket_name=os.environ['AWS_BUCKET_NAME'],
+    #     local_path=os.environ['LOCAL_PATH']
+    # )
+    # # Download daily aggregates (OHLCV data)
+    # for key, result in client.dl('day'):
+    #     if result is True:
+    #         print(f"✅ Downloaded: {key[0]}")
+    #     else:
+    #         print(f"❌ Error downloading {key[0]}: {result}")
 
-    # Download minute aggregates
-    for key, result in client.dl('minute'):
-        if result is True:
-            print(f"✅ Downloaded: {key[0]}")
-        else:
-            print(f"❌ Error downloading {key[0]}: {result}")
+    # # Download minute aggregates
+    # for key, result in client.dl('minute'):
+    #     if result is True:
+    #         print(f"✅ Downloaded: {key[0]}")
+    #     else:
+    #         print(f"❌ Error downloading {key[0]}: {result}")
+    client = PolygonClient(api_key=os.environ['POLYGON_API_KEY'])
+    print(client.fetch_meta("AAPL"))

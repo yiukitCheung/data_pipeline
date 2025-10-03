@@ -55,14 +55,16 @@ build_and_deploy_lambda() {
     # Copy only required clients (not redis, kinesis, aurora)
     cp "$SHARED_DIR/clients/polygon_client.py" "$package_dir/shared/clients/"
     cp "$SHARED_DIR/clients/rds_timescale_client.py" "$package_dir/shared/clients/"
+    cp "$SHARED_DIR/clients/fmp_client.py" "$package_dir/shared/clients/"
     
     # Create minimal __init__.py for Lambda (only what we need)
     cat > "$package_dir/shared/clients/__init__.py" << 'EOF'
 """Client modules for Lambda functions"""
 from .polygon_client import PolygonClient
 from .rds_timescale_client import RDSTimescaleClient
+from .fmp_client import FMPClient
 
-__all__ = ['PolygonClient', 'RDSTimescaleClient']
+__all__ = ['PolygonClient', 'RDSTimescaleClient', 'FMPClient']
 EOF
     
     # Copy models and utils

@@ -14,6 +14,7 @@ from typing import Dict, Any, List
 # Import shared utilities (no layer dependencies)
 from shared.clients.polygon_client import PolygonClient
 from shared.clients.rds_timescale_client import RDSTimescaleClient
+from shared.clients.fmp_client import FMPClient
 from shared.models.data_models import BatchProcessingJob
 
 # Configure logging
@@ -37,18 +38,16 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         polygon_secret = secrets_client.get_secret_value(
             SecretId=os.environ['POLYGON_API_KEY_SECRET_ARN']
         )
+        # Get the API keys from the secrets manager
         polygon_api_key = json.loads(polygon_secret['SecretString'])['POLYGON_API_KEY']
         
         # Initialize clients
         polygon_client = PolygonClient(api_key=polygon_api_key)
-        rds_client = RDSTimescaleClient(
-            secret_arn=os.environ['RDS_SECRET_ARN']
-        )
+        rds_client = RDSTimescaleClient(secret_arn=os.environ['RDS_SECRET_ARN'])
         
         # Parse event parameters
         symbols = event.get('symbols', None)
         batch_size = int(event.get('batch_size', '50'))
-        force_execution = event.get('force', False)
         
         # Create batch job record
         job_id = f"daily-metadata-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
@@ -75,21 +74,35 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             
             for symbol in batch_symbols:
                 try:
-                    # Fetch metadata from Polygon only (no yfinance)
-                    metadata = polygon_client.fetch_meta(ticker=symbol)
+                    # Fetch metadata from Polygon
+                    polygon_metadata = polygon_client.fetch_meta(symbol=symbol)
                     
-                    if metadata:
+                    if polygon_metadata:
+                        # Transform to database schema (without Yahoo Finance data)
+                        metadata = {
+                            'symbol': polygon_metadata.get('ticker', symbol),
+                            'name': polygon_metadata.get('name'),
+                            'market': polygon_metadata.get('market'),
+                            'locale': polygon_metadata.get('locale'),
+                            'active': str(polygon_metadata.get('active', False)),
+                            'primary_exchange': polygon_metadata.get('primary_exchange'),
+                            'type': polygon_metadata.get('type'),
+                            'marketCap': polygon_metadata.get('market_cap'),
+                            'industry': polygon_metadata.get('sic_description'),
+                            'description': polygon_metadata.get('description')
+                        }
+                        
                         # Store in database
                         rds_client.insert_metadata_batch([metadata])
                         total_updated += 1
                         
-                        logger.debug(f"Updated metadata for {symbol}")
+                        logger.info(f"Updated metadata for {symbol}")
                     else:
                         logger.warning(f"No metadata returned for {symbol}")
                         failed_symbols.append(symbol)
                     
                     # Rate limiting - Polygon has 5 requests/minute limit on free tier
-                    time.sleep(0.2)  # 5 requests per second max
+                    time.sleep(1)  # 5 requests per second max
                     
                 except Exception as e:
                     logger.error(f"Error processing {symbol}: {str(e)}")
