@@ -1,5 +1,7 @@
 import requests
 import logging
+import os
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,7 @@ class FMPClient:
             logger.error(f"Error fetching FMP profile for {symbol}: {e}")
             return {}
 if __name__ == "__main__":
-    fmp_client = FMPClient(api_key="nsxezOY5RgF6NTyx6n8UWsBoi9WH0cMq")
+    fmp_client = FMPClient(api_key=os.environ['FMP_API_KEY'])
     print(fmp_client.fetch_profile("AAPL").get("marketCap"))
     
     
