@@ -132,6 +132,15 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         
         logger.info(f"Starting metadata update job: {job_id}")
         
+        # Determine if the market is open
+        market_status = polygon_client.get_market_status()
+        if market_status['market'] == 'closed':
+            logger.info(f"Skipping execution - market is closed")
+            return {
+                'statusCode': 200,
+                'body': json.dumps({'message': 'Skipping execution - market is closed'})
+            }
+            
         # Get symbols to process
         if (symbols is None) and (len(rds_client.get_active_symbols()) != 0):
             symbols = rds_client.get_active_symbols()

@@ -190,36 +190,39 @@ class PolygonClient:
         logger.info(f"Successfully fetched OHLCV data for {len(results)}/{len(symbols)} symbols")
         return results
     
-    def get_market_status(self) -> Dict[str, Any]:
+    def get_market_status(self):
         """
         Get current market status
         Returns a dictionary containing market status information
         """
         try:
-            result = self.client.get_market_status()
+            url = f"https://api.polygon.io/v1/marketstatus/now?apiKey={self.api_key}"
+            response = requests.get(url)
+            result = response.json()
             
-            # Parse the response into a dictionary
+            # Parse the response into a dictionary using correct dict access
             market_status = {
-                'after_hours': result.after_hours,
+                'after_hours': result.get('afterHours'),
                 'currencies': {
-                    'crypto': result.currencies.crypto,
-                    'fx': result.currencies.fx
+                    'crypto': result.get('currencies', {}).get('crypto'),
+                    'fx': result.get('currencies', {}).get('fx')
                 },
-                'early_hours': result.early_hours,
+                'early_hours': result.get('earlyHours'),
                 'exchanges': {
-                    'nasdaq': result.exchanges.nasdaq,
-                    'nyse': result.exchanges.nyse,
-                    'otc': result.exchanges.otc
+                    'nasdaq': result.get('exchanges', {}).get('nasdaq'),
+                    'nyse': result.get('exchanges', {}).get('nyse'),
+                    'otc': result.get('exchanges', {}).get('otc')
                 },
-                'market': result.market,
-                'server_time': result.server_time
+                'market': result.get('market'),
+                'server_time': result.get('serverTime')
             }
             
             return market_status
             
         except Exception as e:
-            logger.error(f"Error getting market status: {e}")
+            print(f"Error getting market status: {e}")
             return {}
+
     
     def get_previous_trading_day(self, from_date: Optional[date] = None) -> date:
         """
@@ -323,25 +326,23 @@ class PolygonAWS_S3Client:
                 yield key, result
 
 if __name__ == "__main__":
-    # client = PolygonAWS_S3Client(
-    #     aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
-    #     aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
-    #     endpoint_url=os.environ['AWS_ENDPOINT_URL'],
-    #     bucket_name=os.environ['AWS_BUCKET_NAME'],
-    #     local_path=os.environ['LOCAL_PATH']
-    # )
-    # # Download daily aggregates (OHLCV data)
-    # for key, result in client.dl('day'):
-    #     if result is True:
-    #         print(f"✅ Downloaded: {key[0]}")
-    #     else:
-    #         print(f"❌ Error downloading {key[0]}: {result}")
+    client = PolygonAWS_S3Client(
+        aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+        aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+        endpoint_url=os.environ['AWS_ENDPOINT_URL'],
+        bucket_name=os.environ['AWS_BUCKET_NAME'],
+        local_path=os.environ['LOCAL_PATH']
+    )
+    # Download daily aggregates (OHLCV data)
+    for key, result in client.dl('day'):
+        if result is True:
+            print(f"✅ Downloaded: {key[0]}")
+        else:
+            print(f"❌ Error downloading {key[0]}: {result}")
 
-    # # Download minute aggregates
-    # for key, result in client.dl('minute'):
-    #     if result is True:
-    #         print(f"✅ Downloaded: {key[0]}")
-    #     else:
-    #         print(f"❌ Error downloading {key[0]}: {result}")
-    client = PolygonClient(api_key=os.environ['POLYGON_API_KEY'])
-    print(client.fetch_meta("AAPL"))
+    # Download minute aggregates
+    for key, result in client.dl('minute'):
+        if result is True:
+            print(f"✅ Downloaded: {key[0]}")
+        else:
+            print(f"❌ Error downloading {key[0]}: {result}")
