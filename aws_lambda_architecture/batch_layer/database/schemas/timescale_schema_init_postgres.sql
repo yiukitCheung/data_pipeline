@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS symbol_metadata (
     type VARCHAR(100),
 	marketCap BIGINT,
 	description TEXT,
-	industry VARCHAR(50),
+	industry VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

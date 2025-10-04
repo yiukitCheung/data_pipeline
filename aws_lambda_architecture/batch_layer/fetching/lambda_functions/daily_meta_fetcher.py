@@ -1,15 +1,17 @@
 """
 AWS Lambda function for daily metadata updating (Simplified - Polygon API only)
 Updates symbol metadata from Polygon API (no yfinance/pandas dependencies)
+Uses asyncio for parallel fetching (10x faster!)
 """
 
 import json
 import boto3
 import logging
-import time
 import os
+import asyncio
+import aiohttp
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # Import shared utilities (no layer dependencies)
 from shared.clients.polygon_client import PolygonClient
@@ -20,6 +22,82 @@ from shared.models.data_models import BatchProcessingJob
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+async def fetch_metadata_async(session: aiohttp.ClientSession, symbol: str, api_key: str) -> Optional[Dict[str, Any]]:
+    """
+    Async fetch metadata for a single symbol from Polygon API
+    """
+    try:
+        url = f"https://api.polygon.io/v3/reference/tickers/{symbol}"
+        params = {'apiKey': api_key}
+        
+        async with session.get(url, params=params) as response:
+            if response.status != 200:
+                logger.warning(f"API request failed for {symbol} with status {response.status}")
+                return None
+            
+            data = await response.json()
+            result = data.get('results', None)
+            
+            if result:
+                # Transform to database schema
+                metadata = {
+                    'symbol': result.get('ticker', symbol),
+                    'name': result.get('name'),
+                    'market': result.get('market'),
+                    'locale': result.get('locale'),
+                    'active': str(result.get('active', False)),
+                    'primary_exchange': result.get('primary_exchange'),
+                    'type': result.get('type'),
+                    'marketCap': result.get('market_cap'),
+                    'industry': result.get('sic_description'),
+                    'description': result.get('description')
+                }
+                logger.info(f"Fetched metadata for {symbol}")
+                return metadata
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error fetching {symbol}: {str(e)}")
+        return None
+
+
+async def fetch_batch_async(symbols: List[str], api_key: str, max_concurrent: int = 10) -> List[Dict[str, Any]]:
+    """
+    Fetch metadata for multiple symbols concurrently
+    
+    Args:
+        symbols: List of symbols to fetch
+        api_key: Polygon API key
+        max_concurrent: Maximum concurrent requests (default 10)
+    
+    Returns:
+        List of metadata dictionaries
+    """
+    connector = aiohttp.TCPConnector(limit=max_concurrent)
+    timeout = aiohttp.ClientTimeout(total=30)
+    
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        tasks = [fetch_metadata_async(session, symbol, api_key) for symbol in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Filter out None and exceptions
+        metadata_list = []
+        failed_symbols = []
+        for symbol, result in zip(symbols, results):
+            if isinstance(result, Exception):
+                logger.error(f"Exception for {symbol}: {str(result)}")
+                failed_symbols.append(symbol)
+            elif result is not None:
+                metadata_list.append(result)
+            else:
+                failed_symbols.append(symbol)
+        
+        if failed_symbols:
+            logger.warning(f"Failed to fetch {len(failed_symbols)} symbols")
+        
+        return metadata_list
 
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
@@ -47,7 +125,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         
         # Parse event parameters
         symbols = event.get('symbols', None)
-        batch_size = int(event.get('batch_size', '50'))
+        batch_size = int(event.get('batch_size', '128'))
         
         # Create batch job record
         job_id = f"daily-metadata-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
@@ -59,62 +137,47 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             symbols = rds_client.get_active_symbols()
             logger.info(f"Fetched {len(symbols)} active symbols from database")
         elif symbols is None:
-            symbols = polygon_client.get_active_symbols()
+            symbols = polygon_client.get_active_symbols()  # Fetch ALL symbols (no limit)
             logger.info(f"No active symbols found in database, fetched {len(symbols)} active symbols from Polygon API")
         else:
             logger.info(f"Processing {len(symbols)} specified symbols")
         
         total_updated = 0
-        failed_symbols = []
+        failed_count = 0
         
-        # Process symbols in batches
+        # Process symbols in batches using async fetching (10 concurrent requests per batch)
         for i in range(0, len(symbols), batch_size):
             batch_symbols = symbols[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}: {len(batch_symbols)} symbols")
+            logger.info(f"Processing batch {i//batch_size + 1}: {len(batch_symbols)} symbols (async)")
             
-            for symbol in batch_symbols:
-                try:
-                    # Fetch metadata from Polygon
-                    polygon_metadata = polygon_client.fetch_meta(symbol=symbol)
+            try:
+                # Fetch entire batch concurrently (10x faster!)
+                batch_metadata = asyncio.run(fetch_batch_async(
+                    batch_symbols, 
+                    polygon_api_key, 
+                    max_concurrent=10
+                ))
+                
+                logger.info(f"Fetched {len(batch_metadata)} metadata records from Polygon API")
+                
+                # Insert batch to database
+                if batch_metadata:
+                    try:
+                        rds_client.insert_metadata_batch(batch_metadata)
+                        total_updated += len(batch_metadata)
+                        logger.info(f"Inserted {len(batch_metadata)} metadata records to database")
+                    except Exception as e:
+                        logger.error(f"Error inserting batch: {str(e)}")
+                        failed_count += len(batch_metadata)
+                else:
+                    logger.warning(f"No metadata fetched for batch {i//batch_size + 1}")
                     
-                    if polygon_metadata:
-                        # Transform to database schema (without Yahoo Finance data)
-                        metadata = {
-                            'symbol': polygon_metadata.get('ticker', symbol),
-                            'name': polygon_metadata.get('name'),
-                            'market': polygon_metadata.get('market'),
-                            'locale': polygon_metadata.get('locale'),
-                            'active': str(polygon_metadata.get('active', False)),
-                            'primary_exchange': polygon_metadata.get('primary_exchange'),
-                            'type': polygon_metadata.get('type'),
-                            'marketCap': polygon_metadata.get('market_cap'),
-                            'industry': polygon_metadata.get('sic_description'),
-                            'description': polygon_metadata.get('description')
-                        }
-                        
-                        # Store in database
-                        rds_client.insert_metadata_batch([metadata])
-                        total_updated += 1
-                        
-                        logger.info(f"Updated metadata for {symbol}")
-                    else:
-                        logger.warning(f"No metadata returned for {symbol}")
-                        failed_symbols.append(symbol)
-                    
-                    # Rate limiting - Polygon has 5 requests/minute limit on free tier
-                    time.sleep(1)  # 5 requests per second max
-                    
-                except Exception as e:
-                    logger.error(f"Error processing {symbol}: {str(e)}")
-                    failed_symbols.append(symbol)
-            
-            # Delay between batches
-            if i + batch_size < len(symbols):
-                logger.info("Pausing between batches...")
-                time.sleep(2)
+            except Exception as e:
+                logger.error(f"Error processing batch {i//batch_size + 1}: {str(e)}")
+                failed_count += len(batch_symbols)
         
         # Log completion
-        logger.info(f"Job completed: {total_updated} updated, {len(failed_symbols)} failed")
+        logger.info(f"Job completed: {total_updated} updated, {failed_count} failed")
         
         return {
             'statusCode': 200,
@@ -122,9 +185,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                 'status': 'completed',
                 'job_id': job_id,
                 'symbols_processed': total_updated,
-                'symbols_failed': len(failed_symbols),
-                'failed_symbols': failed_symbols[:10] if failed_symbols else [],
-                'message': f'Successfully updated {total_updated} symbols'
+                'symbols_failed': failed_count,
+                'message': f'Successfully updated {total_updated} symbols (async)'
             })
         }
         

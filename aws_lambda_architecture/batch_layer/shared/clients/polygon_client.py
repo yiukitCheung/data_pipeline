@@ -33,22 +33,24 @@ class PolygonClient:
         self.client = RESTClient(api_key=self.api_key)
         self.base_url = "https://api.polygon.io"
     
-    def get_active_symbols(self, limit: int = 100) -> List[str]:
+    def get_active_symbols(self, limit: int = None) -> List[str]:
         """
-        Get active stock symbols for data fetching
-        Returns a limited list suitable for AWS Lambda batch processing
+        Get ALL active stock symbols for data fetching
+        Fetches complete stock universe without limit
         
         Args:
-            limit: Maximum number of symbols to return
+            limit: Optional maximum number of symbols to return (None = all symbols, no limit)
             
         Returns:
             List of stock symbols
         """
         try:
+            # Polygon API max is 1000 per request, so we use that for fetching
+            # but return ALL results (no slicing unless limit is explicitly set)
             tickers_response = self.client.list_tickers(
                 market="stocks",
                 active=True,
-                limit=limit
+                limit=1000  # Max per API request
             )
             # Filter for common stocks on major exchanges
             symbols = [
@@ -58,13 +60,14 @@ class PolygonClient:
             ]
             
             if symbols:
-                logger.info(f"Retrieved {len(symbols)} active symbols from API")
-                return symbols[:limit]  # Ensure we don't exceed the limit
+                logger.info(f"Retrieved {len(symbols)} active symbols from Polygon API")
+                # Only apply limit if explicitly set, otherwise return ALL
+                return symbols[:limit] if limit is not None else symbols
             else:
                 logger.warning("No symbols returned from API, using fallback")
                 # Fallback to default symbols (weekend-safe)
                 fallback_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "JPM", "V", "JNJ"]
-                return fallback_symbols[:limit]
+                return fallback_symbols[:limit] if limit is not None else fallback_symbols
             
         except Exception as e:
             logger.error(f"Error fetching active symbols: {e}")
