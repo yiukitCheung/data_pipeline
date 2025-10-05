@@ -9,6 +9,18 @@ services:
   timescaledb:
     image: timescale/timescaledb:latest-pg15
     container_name: batch-timescaledb
+    command:
+      - "postgres"
+      - "-c"
+      - "max_locks_per_transaction=256"  # Increased from default 64
+      - "-c"
+      - "shared_buffers=512MB"           # Increased shared memory
+      - "-c"
+      - "effective_cache_size=2GB"       # Better query planning
+      - "-c"
+      - "maintenance_work_mem=256MB"     # Faster maintenance operations
+      - "-c"
+      - "work_mem=32MB"                  # More memory per query
     environment:
       POSTGRES_DB: condvest
       POSTGRES_USER: yiukitcheung
@@ -25,6 +37,7 @@ services:
       timeout: 10s
       retries: 5
     restart: unless-stopped
+    shm_size: 1gb  # Increase shared memory size
 
 volumes:
   prefect_timescale_data:

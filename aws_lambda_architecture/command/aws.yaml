@@ -1,0 +1,3 @@
+   PGPASSWORD='VFqimYlVgFqkb2kvHJp28i4LYH52ul2m' psql -h dev-batch-postgres.czxi9iwguczt.ca-west-1.rds.amazonaws.com -U postgres -d condvest -c "\dt"
+
+   aws logs tail /aws/lambda/dev-batch-daily-meta-fetcher --follow --region ca-west-1

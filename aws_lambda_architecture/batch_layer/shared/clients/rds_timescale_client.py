@@ -337,3 +337,6 @@ class RDSTimescaleClient:
         if self.connection:
             self.connection.close()
             logger.info("RDS TimescaleDB connection closed")
+if __name__ == "__main__":
+    client = RDSTimescaleClient(secret_arn=os.environ.get('RDS_SECRET_ARN'))
+    print(client.get_active_symbols())

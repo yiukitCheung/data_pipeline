@@ -1,5 +1,5 @@
 # connect to the timescaledb container (CORRECTED)
-docker exec -it batch-timescaledb psql -U condvest_user -d condvest
+docker exec -it batch-timescaledb psql -U yiukitcheung -d condvest
 
 # down the container (CORRECTED)
 docker-compose -f aws_lambda_architecture/batch_layer/local_dev/docker-compose.yml down

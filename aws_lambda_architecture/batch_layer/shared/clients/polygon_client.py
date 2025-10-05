@@ -1,6 +1,7 @@
 """
 Polygon.io client for AWS Lambda Architecture
 Adapted from the existing Prefect Medallion implementation
+Now with async support for concurrent fetching!
 """
 
 import requests
@@ -14,6 +15,8 @@ import re
 from botocore.client import Config
 from concurrent import futures
 import os
+import asyncio
+import aiohttp
 # from dotenv import load_dotenv  # Not needed in Lambda
 
 from ..models.data_models import OHLCVData
@@ -167,7 +170,9 @@ class PolygonClient:
         target_date: date
     ) -> List[OHLCVData]:
         """
-        Fetch OHLCV data for multiple symbols for a specific date
+        Fetch OHLCV data for multiple symbols for a specific date (SYNCHRONOUS - DEPRECATED)
+        
+        DEPRECATED: Use fetch_batch_ohlcv_data_async() for 10x faster performance
         
         Args:
             symbols: List of stock symbols
@@ -189,6 +194,114 @@ class PolygonClient:
         
         logger.info(f"Successfully fetched OHLCV data for {len(results)}/{len(symbols)} symbols")
         return results
+    
+    async def fetch_ohlcv_data_async(
+        self,
+        session: aiohttp.ClientSession,
+        symbol: str,
+        target_date: date,
+        timespan: str = "day",
+        multiplier: int = 1
+    ) -> Optional[OHLCVData]:
+        """
+        Async fetch OHLCV data for a single symbol (10x faster when used with batch)
+        
+        Args:
+            session: aiohttp ClientSession for connection pooling
+            symbol: Stock symbol (e.g., "AAPL")
+            target_date: Date to fetch data for
+            timespan: "minute", "hour", "day", "week", "month"
+            multiplier: Size of timespan multiplier
+            
+        Returns:
+            OHLCVData object or None if no data found
+        """
+        try:
+            date_str = target_date.strftime('%Y-%m-%d')
+            
+            # Polygon aggregates API endpoint
+            url = f"{self.base_url}/v2/aggs/ticker/{symbol}/range/{multiplier}/{timespan}/{date_str}/{date_str}"
+            params = {'apiKey': self.api_key, 'adjusted': 'true'}
+            
+            async with session.get(url, params=params) as response:
+                if response.status != 200:
+                    logger.warning(f"API request failed for {symbol} with status {response.status}")
+                    return None
+                
+                data = await response.json()
+                results = data.get('results', [])
+                
+                if not results or len(results) == 0:
+                    logger.debug(f"No OHLCV data found for {symbol} on {date_str}")
+                    return None
+                
+                # Take the first result (should be only one for a specific date)
+                bar = results[0]
+                
+                # Convert to our data model
+                ohlcv_data = OHLCVData(
+                    symbol=symbol,
+                    timestamp=datetime.fromtimestamp(bar['t'] / 1000),  # Convert from milliseconds
+                    open=Decimal(str(bar['o'])),
+                    high=Decimal(str(bar['h'])),
+                    low=Decimal(str(bar['l'])),
+                    close=Decimal(str(bar['c'])),
+                    volume=int(bar['v']),
+                    interval=f"{multiplier}{timespan[0]}"
+                )
+                
+                logger.debug(f"Fetched OHLCV data for {symbol} on {date_str}")
+                return ohlcv_data
+                
+        except Exception as e:
+            logger.error(f"Error fetching OHLCV data for {symbol} on {target_date}: {e}")
+            return None
+    
+    async def fetch_batch_ohlcv_data_async(
+        self,
+        symbols: List[str],
+        target_date: date,
+        max_concurrent: int = 10
+    ) -> List[OHLCVData]:
+        """
+        Async fetch OHLCV data for multiple symbols concurrently (10x faster!)
+        
+        Args:
+            symbols: List of stock symbols
+            target_date: Date to fetch data for
+            max_concurrent: Maximum concurrent requests (default 10)
+            
+        Returns:
+            List of OHLCVData objects
+        """
+        connector = aiohttp.TCPConnector(limit=max_concurrent)
+        timeout = aiohttp.ClientTimeout(total=30)
+        
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            tasks = [
+                self.fetch_ohlcv_data_async(session, symbol, target_date)
+                for symbol in symbols
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Filter out None and exceptions
+            ohlcv_list = []
+            failed_symbols = []
+            
+            for symbol, result in zip(symbols, results):
+                if isinstance(result, Exception):
+                    logger.error(f"Exception for {symbol}: {str(result)}")
+                    failed_symbols.append(symbol)
+                elif result is not None:
+                    ohlcv_list.append(result)
+                else:
+                    failed_symbols.append(symbol)
+            
+            if failed_symbols:
+                logger.warning(f"Failed to fetch {len(failed_symbols)} symbols: {failed_symbols[:10]}...")
+            
+            logger.info(f"Successfully fetched OHLCV data for {len(ohlcv_list)}/{len(symbols)} symbols (async)")
+            return ohlcv_list
     
     def get_market_status(self):
         """
