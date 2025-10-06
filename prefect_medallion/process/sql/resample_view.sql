@@ -1,8 +1,8 @@
 WITH numbered AS (
     SELECT
         *,
-        ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date) AS rn
-    FROM raw_data
+        ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY timestamp) AS rn
+    FROM test_raw_ohlcv
 ),
 grp AS (
     SELECT
@@ -12,7 +12,7 @@ grp AS (
 )
 SELECT
     symbol,
-    MIN(date)   AS date,
+    MIN(timestamp)   AS timestamp,
     FIRST(open) AS open,
     MAX(high)   AS high,
     MIN(low)    AS low,

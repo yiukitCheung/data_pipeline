@@ -1,6 +1,5 @@
 """
-RDS PostgreSQL + TimescaleDB client for database operations
-Cost-efficient alternative to Aurora for time-series data
+RDS PostgreSQL client for database operations
 """
 
 import boto3
@@ -18,14 +17,14 @@ from ..models.data_models import OHLCVData, BatchProcessingJob
 logger = logging.getLogger(__name__)
 
 
-class RDSTimescaleClient:
-    """Client for RDS PostgreSQL + TimescaleDB database operations"""
+class RDSPostgresClient:
+    """Client for RDS PostgreSQL database operations"""
     
     def __init__(self, endpoint: str = None, port: str = None, 
                     username: str = None, password: str = None, 
                     database: str = None, secret_arn: str = None):
-        """s
-        Initialize RDS TimescaleDB client
+        """
+        Initialize RDS PostgreSQL client
         
         Can use either direct credentials or AWS Secrets Manager
         """
@@ -65,7 +64,7 @@ class RDSTimescaleClient:
             raise
     
     def _connect(self):
-        """Establish connection to RDS PostgreSQL + TimescaleDB"""
+        """Establish connection to RDS PostgreSQL"""
         try:
             self.connection = psycopg2.connect(
                 host=self.endpoint,
@@ -77,12 +76,12 @@ class RDSTimescaleClient:
             )
             self.connection.autocommit = True
             
-            # Note: AWS RDS PostgreSQL doesn't support TimescaleDB extension
-            # Using regular PostgreSQL with time-series optimized tables instead
-            logger.info("Connected to RDS PostgreSQL (TimescaleDB not available on RDS)")
+            # Removed TimescaleDB extension check as this is a standard PostgreSQL client.
+            
+            logger.info("Connected to RDS PostgreSQL")
             
         except Exception as e:
-            logger.error(f"Error connecting to RDS TimescaleDB: {str(e)}")
+            logger.error(f"Error connecting to RDS PostgreSQL: {str(e)}")
             raise
     
     def execute_query(self, sql: str, parameters: tuple = None) -> List[Dict[str, Any]]:
@@ -126,7 +125,7 @@ class RDSTimescaleClient:
             raise
     
     def insert_ohlcv_data(self, ohlcv_data: List[OHLCVData]) -> int:
-        """Insert OHLCV data into the raw_ohlcv table (TimescaleDB optimized)"""
+        """Insert OHLCV data into the raw_ohlcv table (PostgreSQL optimized)"""
         if not ohlcv_data:
             return 0
         
@@ -336,7 +335,7 @@ class RDSTimescaleClient:
         """Close database connection"""
         if self.connection:
             self.connection.close()
-            logger.info("RDS TimescaleDB connection closed")
+            logger.info("RDS PostgreSQL connection closed")
 if __name__ == "__main__":
-    client = RDSTimescaleClient(secret_arn=os.environ.get('RDS_SECRET_ARN'))
+    client = RDSPostgresClient(secret_arn=os.environ.get('RDS_SECRET_ARN'))
     print(client.get_active_symbols())

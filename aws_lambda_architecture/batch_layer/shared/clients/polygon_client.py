@@ -335,8 +335,7 @@ class PolygonClient:
         except Exception as e:
             print(f"Error getting market status: {e}")
             return {}
-
-    
+ 
     def get_previous_trading_day(self, from_date: Optional[date] = None) -> date:
         """
         Get the previous trading day from a given date

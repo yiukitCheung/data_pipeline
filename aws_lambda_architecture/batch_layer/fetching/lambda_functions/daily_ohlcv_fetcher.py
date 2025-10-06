@@ -18,7 +18,6 @@ from decimal import Decimal
 from shared.clients.polygon_client import PolygonClient
 from shared.clients.rds_timescale_client import RDSTimescaleClient
 from shared.models.data_models import OHLCVData, BatchProcessingJob
-from shared.utils.market_calendar import is_trading_day
 
 # Configure logging
 logger = logging.getLogger()
@@ -65,18 +64,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         if target_date:
             target_date = datetime.fromisoformat(target_date).date()
         else:
-            target_date = get_previous_trading_day()
-        
-        # Check if we should run
-        if not force_execution and not is_trading_day(target_date):
-            logger.info(f"Skipping execution - {target_date} is not a trading day")
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'message': f'Skipped - {target_date} is not a trading day',
-                    'date': target_date.isoformat()
-                })
-            }
+            target_date = polygon_client.get_previous_trading_day()
         
         # Create batch job record
         job_id = f"daily-ohlcv-{target_date.isoformat()}-{int(datetime.utcnow().timestamp())}"
@@ -184,21 +172,6 @@ def fetch_ohlcv_batch(
     # Use the proven batch method from our tests
     return polygon_client.fetch_batch_ohlcv_data(symbols, target_date)
 
-def get_previous_trading_day() -> datetime.date:
-    """
-    Get the previous trading day
-    """
-    today = datetime.now().date()
-    days_back = 1
-    
-    while days_back <= 7:  # Don't go back more than a week
-        check_date = today - timedelta(days=days_back)
-        if is_trading_day(check_date):
-            return check_date
-        days_back += 1
-    
-    # Fallback to yesterday if no trading day found
-    return today - timedelta(days=1)
 
 def store_job_metadata(rds_client: RDSTimescaleClient, batch_job: BatchProcessingJob):
     """
@@ -212,32 +185,32 @@ def store_job_metadata(rds_client: RDSTimescaleClient, batch_job: BatchProcessin
 
 def trigger_fibonacci_resampling_job(target_date: datetime.date):
     """
-    Trigger the Fibonacci resampling job after bronze layer completion
+    Trigger the Resampling job after bronze layer completion
     Uses AWS Batch for cost-efficient processing
     """
     try:
         batch_client = boto3.client('batch')
         
-        # Submit Fibonacci resampling job to AWS Batch
-        job_name = f"fibonacci-resampling-{target_date.isoformat()}-{int(datetime.utcnow().timestamp())}"
+        # Submit Resampling job to AWS Batch
+        job_name = f"Resampling-{target_date.isoformat()}-{int(datetime.utcnow().timestamp())}"
         
         response = batch_client.submit_job(
             jobName=job_name,
             jobQueue=os.environ['BATCH_JOB_QUEUE'],
-            jobDefinition=os.environ['FIBONACCI_RESAMPLING_JOB_DEFINITION'],
+            jobDefinition=os.environ['RESAMPLING_JOB_DEFINITION'],
             parameters={
                 'date': target_date.isoformat(),
-                'triggeredBy': 'bronze_layer'
+                'triggeredBy': 'bronze_layer_resampling'
                 # No CLI arguments needed - resampler uses environment variables
             }
         )
         
         job_id = response['jobId']
-        logger.info(f"Triggered Fibonacci resampling job {job_name} (ID: {job_id}) for {target_date}")
+        logger.info(f"Triggered Resampling job {job_name} (ID: {job_id}) for {target_date}")
         
         return job_id
         
     except Exception as e:
-        logger.error(f"Error triggering Fibonacci resampling job: {str(e)}")
-        # Don't fail Bronze layer for Silver layer trigger issues
+        logger.error(f"Error triggering Resampling job: {str(e)}")
+        # Don't fail Bronze layer for Resampling layer trigger issues
         return None

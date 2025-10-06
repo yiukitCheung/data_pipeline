@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 
 # Add shared utilities
 sys.path.append('/opt/python')
-from shared.clients.rds_timescale_client import RDSTimescaleClient
+from shared.clients.rds_timescale_client import RDSPostgresClient # Corrected import
 from shared.utils.market_calendar import get_previous_trading_day
 
 # Configure logging
@@ -25,38 +25,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class RDSTimescaleFibonacciResampler:
+class RDSPostgresResampler: # Renamed class
     """
-    High-performance OHLCV resampling using RDS PostgreSQL + TimescaleDB
+    High-performance OHLCV resampling using RDS PostgreSQL
     
-    Mimics your DuckDB implementation but leverages TimescaleDB's:
-    - Hypertables for automatic partitioning
-    - Columnar compression
-    - Parallel query execution  
-    - Time-series optimized indexes
+    Mimics your DuckDB implementation but leverages PostgreSQL's:
+    - Declarative partitioning for automatic data management
     - Your proven ROW_NUMBER approach
     """
     
     # Fibonacci intervals 3-34 (matching your settings.yaml)
-    FIBONACCI_INTERVALS = [3, 5, 8, 13, 21, 34]
+    RESAMPLING_INTERVALS = [3, 5, 8, 13, 21, 34]
     
     def __init__(self):
-        """Initialize with RDS TimescaleDB connection"""
+        """Initialize with RDS PostgreSQL connection"""
         # Use AWS Secrets Manager for credentials
         secret_arn = os.environ.get('RDS_SECRET_ARN')
         
         if secret_arn:
-            self.db_client = RDSTimescaleClient(secret_arn=secret_arn)
+            self.db_client = RDSPostgresClient(secret_arn=secret_arn)
         else:
             # Fallback to environment variables
-            self.db_client = RDSTimescaleClient(
+            self.db_client = RDSPostgresClient(
                 endpoint=os.environ['RDS_ENDPOINT'],
                 username=os.environ['RDS_USERNAME'],
                 password=os.environ['RDS_PASSWORD'],
                 database=os.environ['RDS_DATABASE']
             )
         
-        logger.info("RDS TimescaleDB Fibonacci Resampler initialized")
+        logger.info("RDS PostgreSQL Resampler initialized")
         
     def get_symbols_to_process(self) -> List[str]:
         """Get all active symbols from symbol metadata"""
@@ -69,7 +66,7 @@ class RDSTimescaleFibonacciResampler:
             raise
     
     def create_silver_table_if_not_exists(self, interval: int):
-        """Create TimescaleDB-optimized silver table for specific interval"""
+        """Create PostgreSQL-optimized silver table for specific interval"""
         table_name = f"silver_{interval}d"
         
         create_table_sql = f"""
@@ -77,37 +74,23 @@ class RDSTimescaleFibonacciResampler:
         CREATE TABLE IF NOT EXISTS {table_name} (
             timestamp TIMESTAMPTZ NOT NULL,
             symbol VARCHAR(50) NOT NULL,
-            open_price DECIMAL(12,4) NOT NULL,
-            high_price DECIMAL(12,4) NOT NULL,
-            low_price DECIMAL(12,4) NOT NULL,
-            close_price DECIMAL(12,4) NOT NULL,
+            open DECIMAL(12,4) NOT NULL,
+            high DECIMAL(12,4) NOT NULL,
+            low DECIMAL(12,4) NOT NULL,
+            close DECIMAL(12,4) NOT NULL,
             volume BIGINT NOT NULL,
-            interval_days INTEGER DEFAULT {interval},
+            interval INTEGER DEFAULT {interval},
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (timestamp, symbol)
         );
-        
-        -- Convert to TimescaleDB hypertable (if not already)
-        SELECT create_hypertable('{table_name}', 'timestamp', if_not_exists => TRUE);
-        
-        -- Performance indexes (TimescaleDB optimized)
-        CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_timestamp ON {table_name}(symbol, timestamp DESC);
-        CREATE INDEX IF NOT EXISTS idx_{table_name}_timestamp ON {table_name}(timestamp DESC);
-        
-        -- Enable compression for cost efficiency
-        ALTER TABLE {table_name} SET (
-            timescaledb.compress,
-            timescaledb.compress_segmentby = 'symbol',
-            timescaledb.compress_orderby = 'timestamp DESC'
-        );
-        
-        -- Add compression policy (compress data older than 7 days)
-        SELECT add_compression_policy('{table_name}', INTERVAL '7 days');
+        CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_date ON {table_name}(symbol, date DESC);
+        CREATE INDEX IF NOT EXISTS idx_{table_name}_date ON {table_name}(date DESC);
+
         """
         
         try:
             self.db_client.execute_query(create_table_sql)
-            logger.info(f"TimescaleDB table {table_name} created/verified with hypertable optimization")
+            logger.info(f"PostgreSQL table {table_name} created/verified")
         except Exception as e:
             logger.error(f"Error creating table {table_name}: {str(e)}")
             raise
@@ -117,26 +100,26 @@ class RDSTimescaleFibonacciResampler:
         Generate high-performance resampling SQL using your proven DuckDB approach
         
         SIMPLIFIED: Always does full resampling (no incremental complexity)
-        This SQL directly mimics your DuckDB logic but optimized for TimescaleDB:
+        This SQL directly mimics your DuckDB logic but optimized for PostgreSQL:
         - Uses ROW_NUMBER() for grouping (exactly like your implementation)
         - Uses array_agg() for open/close (PostgreSQL equivalent of FIRST/LAST)
-        - Leverages TimescaleDB's time-series optimizations
+        - Leverages PostgreSQL's time-series optimizations (via partitioning set up separately)
         """
         
-        # PostgreSQL + TimescaleDB compatible SQL with proper aggregation handling
+        # PostgreSQL compatible SQL with proper aggregation handling
         sql = f"""
         WITH numbered AS (
             SELECT
                 symbol,
                 DATE(timestamp) as date,
-                open_price as open,
-                high_price as high,
-                low_price as low,
-                close_price as close,
+                open as open,
+                high as high,
+                low as low,
+                close as close,
                 volume,
                 ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY DATE(timestamp)) AS rn
             FROM raw_ohlcv
-            WHERE interval_type = '1d'
+            WHERE interval = '1d' -- Corrected: filtering on 'interval' column
         ),
         grp AS (
             SELECT
@@ -216,7 +199,7 @@ class RDSTimescaleFibonacciResampler:
         clear_sql = f"DELETE FROM {table_name}"
         
         insert_sql = f"""
-        INSERT INTO {table_name} (timestamp, symbol, open_price, high_price, low_price, close_price, volume)
+        INSERT INTO {table_name} (timestamp, symbol, open, high, low, close, volume)
         {resampling_sql}
         """
         
@@ -243,21 +226,21 @@ class RDSTimescaleFibonacciResampler:
             logger.error(f"Error processing {interval}d: {str(e)}")
             raise
     
-    def run_fibonacci_resampling_job(self, intervals: List[int] = None) -> Dict[str, any]:
+    def run_resampling_job(self, intervals: List[int] = None) -> Dict[str, any]:
         """
-        Run the complete Fibonacci resampling job for intervals 3-34
+        Run the complete Resampling job for intervals 3-34
         
         SIMPLIFIED: Always does full resampling (no incremental complexity)
         
         Args:
-            intervals: Optional list of intervals to process (default: 3-34 Fibonacci)
+            intervals: Optional list of intervals to process (default: 3-34 Resampling)
         """
         start_time = time.time()
-        logger.info("Starting RDS TimescaleDB Fibonacci resampling job (3-34) - FULL RESAMPLING")
+        logger.info("Starting RDS PostgreSQL Resampling job (3-34) - FULL RESAMPLING")
         
-        # Use Fibonacci intervals 3-34 if not specified
+        # Use Resampling intervals 3-34 if not specified
         if intervals is None:
-            intervals = self.FIBONACCI_INTERVALS
+            intervals = self.RESAMPLING_INTERVALS
         
         # Process each interval
         total_stats = {
@@ -292,92 +275,39 @@ class RDSTimescaleFibonacciResampler:
         total_stats['end_time'] = end_time
         total_stats['duration_seconds'] = end_time - start_time
         
-        logger.info(f"Fibonacci resampling job completed: {total_stats}")
+        logger.info(f"Resampling job completed: {total_stats}")
         return total_stats
     
-    def optimize_tables(self):
-        """Run VACUUM and ANALYZE on silver tables for TimescaleDB performance"""
-        logger.info("Optimizing TimescaleDB silver tables...")
-        
-        for interval in self.FIBONACCI_INTERVALS:
-            table_name = f"silver_{interval}d"
-            try:
-                # ANALYZE for query planner statistics
-                self.db_client.execute_query(f"ANALYZE {table_name}")
-                
-                # TimescaleDB specific optimization
-                self.db_client.execute_query(f"SELECT compress_chunk(i) FROM show_chunks('{table_name}') i")
-                
-                logger.debug(f"Optimized TimescaleDB table {table_name}")
-            except Exception as e:
-                logger.warning(f"Could not optimize table {table_name}: {str(e)}")
-        
-        logger.info("TimescaleDB table optimization completed")
-    
-    def get_performance_stats(self) -> Dict[str, any]:
-        """Get TimescaleDB performance statistics for monitoring"""
-        stats = {}
-        
-        for interval in self.FIBONACCI_INTERVALS:
-            table_name = f"silver_{interval}d"
-            try:
-                # Get TimescaleDB specific statistics
-                size_query = f"""
-                SELECT 
-                    COUNT(*) as row_count,
-                    pg_size_pretty(pg_total_relation_size('{table_name}')) as table_size,
-                    (SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name = '{table_name}') as chunk_count,
-                    (SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name = '{table_name}' AND is_compressed = true) as compressed_chunks
-                FROM {table_name}
-                """
-                result = self.db_client.execute_query(size_query)
-                
-                if result:
-                    stats[f"{interval}d"] = {
-                        'row_count': result[0]['row_count'],
-                        'table_size': result[0]['table_size'],
-                        'chunk_count': result[0]['chunk_count'],
-                        'compressed_chunks': result[0]['compressed_chunks']
-                    }
-                    
-            except Exception as e:
-                logger.warning(f"Could not get stats for {table_name}: {str(e)}")
-        
-        return stats
-    
     def close(self):
-        """Close RDS TimescaleDB connection"""
+        """Close RDS PostgreSQL connection"""
         if hasattr(self.db_client, 'close'):
             self.db_client.close()
-        logger.info("RDS TimescaleDB connection closed")
+        logger.info("RDS PostgreSQL connection closed")
 
 def main():
     """
-    Main entry point for automated AWS Batch Fibonacci resampling job
+    Main entry point for automated AWS Batch Resampling job
     
     No command-line arguments needed - this runs automatically after daily_ohlcv_fetcher
-    Configuration comes from environment variables set by AWS Batch
+    Configuration comes from environment variables set in the AWS Batch Job Definition
     """
     
     try:
-        logger.info("Starting automated AWS Batch Fibonacci resampling job (RDS TimescaleDB)")
-        resampler = RDSTimescaleFibonacciResampler()
+        logger.info("Starting automated AWS Batch Resampling job (RDS PostgreSQL)")
+        resampler = RDSPostgresResampler()
         
         # Get intervals from environment variable (set by Terraform)
-        intervals_env = os.environ.get('FIBONACCI_INTERVALS', '3,5,8,13,21,34')
+        intervals_env = os.environ.get('RESAMPLING_INTERVALS', '3,5,8,13,21,34')
         intervals = [int(x.strip()) for x in intervals_env.split(',')]
         
-        logger.info(f"Processing Fibonacci intervals: {intervals}")
+        logger.info(f"Processing Resampling intervals: {intervals}")
         
-        # Run Fibonacci resampling job (ALWAYS FULL RESAMPLING)
-        job_stats = resampler.run_fibonacci_resampling_job(intervals=intervals)
-        
-        # Optimize tables after processing
-        resampler.optimize_tables()
+        # Run Resampling job (ALWAYS FULL RESAMPLING)
+        job_stats = resampler.run_resampling_job(intervals=intervals)
         
         # Log final statistics
         logger.info("="*60)
-        logger.info("AWS BATCH FIBONACCI RESAMPLING JOB SUMMARY (RDS TimescaleDB)")
+        logger.info("AWS BATCH RESAMPLING JOB SUMMARY (RDS PostgreSQL)")
         logger.info("="*60)
         logger.info(f"Intervals Processed: {job_stats['intervals_processed']}")
         logger.info(f"Total Records: {job_stats['total_records']}")
@@ -389,7 +319,7 @@ def main():
         return 0 if job_stats['errors'] == 0 else 1
         
     except Exception as e:
-        logger.error(f"Fatal error in AWS Batch Fibonacci resampling job: {str(e)}")
+        logger.error(f"Fatal error in AWS Batch Resampling job: {str(e)}")
         return 1
     finally:
         if 'resampler' in locals():
