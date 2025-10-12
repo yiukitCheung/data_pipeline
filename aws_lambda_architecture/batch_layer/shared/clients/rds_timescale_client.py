@@ -171,6 +171,31 @@ class RDSPostgresClient:
             logger.error(f"Error inserting OHLCV data: {str(e)}")
             raise
     
+    def insert_silver_batch(self, table_name: str, data_tuples: List[tuple]) -> int:
+        """Execute high-performance batch insert using psycopg2.extras.execute_values"""
+        try:
+            import psycopg2.extras
+            
+            # Create insert SQL for specific table
+            sql = f"""
+            INSERT INTO {table_name} (timestamp, symbol, open, high, low, close, volume)
+            VALUES %s
+            """
+            
+            # Use psycopg2.extras.execute_values for high-performance bulk insert
+            with self.connection.cursor() as cursor:
+                psycopg2.extras.execute_values(
+                    cursor, sql, data_tuples, template=None, page_size=1000
+                )
+                records_inserted = cursor.rowcount
+            
+            return records_inserted
+            
+        except Exception as e:
+            logger.error(f"Error executing batch insert into {table_name}: {str(e)}")
+            raise
+    
+        
     def insert_metadata_batch(self, metadata_list: List[Dict[str, Any]]) -> int:
         """Insert metadata batch into symbol_metadata table"""
         if not metadata_list:
