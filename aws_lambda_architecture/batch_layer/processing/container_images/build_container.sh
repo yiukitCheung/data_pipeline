@@ -11,10 +11,10 @@ SHARED_DIR="$BATCH_DIR/shared"  # Fixed: shared is now in batch_layer/shared
 # Default values
 AWS_REGION=${AWS_REGION:-ca-west-1}
 AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}
-ECR_REPOSITORY=${ECR_REPOSITORY:-dev-batch-fibonacci-resampler}
+ECR_REPOSITORY=${ECR_REPOSITORY:-dev-batch-processor}
 IMAGE_TAG=${IMAGE_TAG:-latest}
 
-echo "🔧 Building Docker container for processing component..."
+echo "🔧 Building Docker container for DuckDB + S3 + RDS Resampler..."
 echo "📍 Region: $AWS_REGION"
 echo "🏗️ Repository: $ECR_REPOSITORY"
 echo "🏷️ Tag: $IMAGE_TAG"
@@ -32,6 +32,7 @@ cp -r "$SHARED_DIR" "$PROCESSING_DIR/"
 echo "🐳 Building Docker image..."
 cd "$BATCH_DIR"
 docker build \
+    --platform linux/amd64 \
     -f "$PROCESSING_DIR/container_images/Dockerfile" \
     -t "$ECR_REPOSITORY:$IMAGE_TAG" \
     --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \

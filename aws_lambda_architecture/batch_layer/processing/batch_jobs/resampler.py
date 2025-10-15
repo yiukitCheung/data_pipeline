@@ -17,11 +17,11 @@ import duckdb
 import pandas as pd
 from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional
-
+import boto3
+import json
 # Add shared utilities
 sys.path.append('/opt/python')
 from shared.clients.rds_timescale_client import RDSPostgresClient
-from shared.utils.market_calendar import get_previous_trading_day
 
 # Configure logging
 logging.basicConfig(
@@ -56,9 +56,37 @@ class DuckDBS3Resampler:
         secret_arn = os.environ.get('RDS_SECRET_ARN')
         
         if secret_arn:
-            self.rds_client = RDSPostgresClient(secret_arn=secret_arn)
+            try:
+                # Try to get credentials from Secrets Manager first
+                logger.info(f"Attempting to retrieve RDS credentials from Secrets Manager: {secret_arn}")
+                secrets_client = boto3.client('secretsmanager')
+                rds_secret = secrets_client.get_secret_value(SecretId=secret_arn)
+                rds_credentials = json.loads(rds_secret['SecretString'])
+                
+                logger.info("✅ Successfully retrieved RDS credentials from Secrets Manager")
+                
+                # Initialize RDS client with Secrets Manager credentials
+                self.rds_client = RDSPostgresClient(
+                    endpoint=rds_credentials.get('host') or rds_credentials.get('endpoint'),
+                    username=rds_credentials['username'],
+                    password=rds_credentials['password'],
+                    database=rds_credentials.get('dbname') or rds_credentials['database']
+                )
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to retrieve credentials from Secrets Manager: {str(e)}")
+                logger.info("🔄 Falling back to environment variables for RDS credentials")
+                
+                # Fallback to environment variables
+                self.rds_client = RDSPostgresClient(
+                    endpoint=os.environ['RDS_ENDPOINT'],
+                    username=os.environ['RDS_USERNAME'],
+                    password=os.environ['RDS_PASSWORD'],
+                    database=os.environ['RDS_DATABASE']
+                )
         else:
-            # Fallback to environment variables
+            # Use environment variables directly
+            logger.info("Using environment variables for RDS credentials")
             self.rds_client = RDSPostgresClient(
                 endpoint=os.environ['RDS_ENDPOINT'],
                 username=os.environ['RDS_USERNAME'],
@@ -69,23 +97,33 @@ class DuckDBS3Resampler:
         logger.info("DuckDB + S3 + RDS Resampler initialized")
     
     def _setup_duckdb_s3_config(self):
-        """Configure DuckDB for S3 access using AWS credentials"""
+        """Configure DuckDB for S3 access using IAM roles (AWS best practice)"""
         try:
+            # Install and load the httpfs extension for S3 access
+            self.duckdb_conn.execute("INSTALL httpfs")
+            self.duckdb_conn.execute("LOAD httpfs")
+            
             # Set S3 region
             s3_region = os.environ.get('AWS_REGION', 'ca-west-1')
             self.duckdb_conn.execute(f"SET s3_region='{s3_region}'")
             
-            # Set AWS credentials
-            aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
-            aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+            # Configure DuckDB S3 settings
+            self.duckdb_conn.execute("SET s3_use_ssl=true")
+            self.duckdb_conn.execute("SET s3_url_style='path'")
+            self.duckdb_conn.execute("SET s3_endpoint='s3.ca-west-1.amazonaws.com'")
             
-            if aws_access_key and aws_secret_key:
-                self.duckdb_conn.execute(f"SET s3_access_key_id='{aws_access_key}'")
-                self.duckdb_conn.execute(f"SET s3_secret_access_key='{aws_secret_key}'")
-            else:
-                logger.warning("AWS credentials not found, DuckDB will use IAM roles")
+            # Initialize AWS SDK credential chain for DuckDB
+            import boto3
+            session = boto3.Session()
+            credentials = session.get_credentials()
             
-            logger.info(f"DuckDB S3 configuration completed for region: {s3_region}")
+            if credentials:
+                self.duckdb_conn.execute(f"SET s3_access_key_id='{credentials.access_key}'")
+                self.duckdb_conn.execute(f"SET s3_secret_access_key='{credentials.secret_key}'")
+                if credentials.token:
+                    self.duckdb_conn.execute(f"SET s3_session_token='{credentials.token}'")
+            
+            logger.info("✅ DuckDB S3 configured successfully")
             
         except Exception as e:
             logger.error(f"Error configuring DuckDB S3 access: {str(e)}")
@@ -95,6 +133,7 @@ class DuckDBS3Resampler:
         """Create DuckDB view for S3 parquet data"""
         try:
             s3_path = f"s3://{s3_bucket}/{s3_prefix}/*.parquet"
+            logger.info(f"Creating DuckDB view for S3 path: {s3_path}")
             
             create_view_sql = f"""
             CREATE OR REPLACE VIEW s3_ohlcv AS
@@ -102,7 +141,7 @@ class DuckDBS3Resampler:
             """
             
             self.duckdb_conn.execute(create_view_sql)
-            logger.info(f"DuckDB view 's3_ohlcv' created for S3 path: {s3_path}")
+            logger.info(f"DuckDB view 's3_ohlcv' created successfully")
             
         except Exception as e:
             logger.error(f"Error creating S3 view: {str(e)}")
@@ -125,19 +164,19 @@ class DuckDBS3Resampler:
         create_table_sql = f"""
         -- Create the table if it doesn't exist
             CREATE TABLE IF NOT EXISTS {table_name} (
-            timestamp TIMESTAMPTZ NOT NULL,
+            ts TIMESTAMPTZ NOT NULL,
             symbol VARCHAR(50) NOT NULL,
             open DECIMAL(12,4) NOT NULL,
             high DECIMAL(12,4) NOT NULL,
             low DECIMAL(12,4) NOT NULL,
             close DECIMAL(12,4) NOT NULL,
             volume BIGINT NOT NULL,
-            interval INTEGER DEFAULT {interval},    
+            resampling_interval INTEGER DEFAULT {interval},    
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (timestamp, symbol)
+            PRIMARY KEY (ts, symbol)
         );
-        CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_timestamp ON {table_name}(symbol, timestamp DESC);
-        CREATE INDEX IF NOT EXISTS idx_{table_name}_timestamp ON {table_name}(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_{table_name}_symbol_timestamp ON {table_name}(symbol, ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_{table_name}_timestamp ON {table_name}(ts DESC);
 
         """
         
@@ -211,7 +250,7 @@ class DuckDBS3Resampler:
             )
             SELECT
                 symbol,
-                start_date AS timestamp,
+                start_date AS ts,
                 open,
                 high,
                 low,
@@ -263,14 +302,13 @@ class DuckDBS3Resampler:
         resampling_sql = self.get_fibonacci_resampling_sql(interval, latest_timestamp)
         
         try:
-            # Execute resampling in DuckDB and get results as DuckDB result set (no DataFrame conversion)
+            # Execute resampling in DuckDB
             logger.info(f"Executing DuckDB resampling for {interval}d...")
             result = self.duckdb_conn.execute(resampling_sql)
             
-            # Get count without converting to DataFrame
+            # Get count of results
             count_result = self.duckdb_conn.execute(f"SELECT COUNT(*) FROM ({resampling_sql}) AS resampled_data").fetchone()
             records_count = count_result[0] if count_result else 0
-            
             logger.info(f"DuckDB processed {records_count} records for {interval}d")
             
             if records_count == 0:
@@ -305,8 +343,34 @@ class DuckDBS3Resampler:
     def _get_latest_timestamp_from_rds(self, table_name: str) -> Optional[str]:
         """Get the latest timestamp from RDS table for incremental processing"""
         try:
+            # First check if table exists
+            check_table_query = f"""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = '{table_name}'
+            );
+            """
+            
+            table_exists_result = self.rds_client.execute_query(check_table_query)
+            if not table_exists_result or not table_exists_result[0]['exists']:
+                logger.info(f"Table {table_name} does not exist yet, will perform full resampling")
+                return None
+            
+            # Check if table has the correct schema (ts column)
+            check_schema_query = f"""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = '{table_name}' AND column_name = 'ts';
+            """
+            
+            schema_result = self.rds_client.execute_query(check_schema_query)
+            if not schema_result:
+                logger.info(f"Table {table_name} exists but doesn't have 'ts' column, will perform full resampling")
+                return None
+            
+            # Now safely query for latest timestamp
             query = f"""
-            SELECT MAX(timestamp) as latest_timestamp 
+            SELECT MAX(ts) as latest_timestamp 
             FROM {table_name}
             """
             
@@ -373,11 +437,14 @@ class DuckDBS3Resampler:
             intervals: Optional list of intervals to process (default: 3-34 Resampling)
         """
         start_time = time.time()
-        logger.info("Starting DuckDB + S3 + RDS Resampling job (3-34)")
+        logger.info("🚀 Starting DuckDB + S3 + RDS Resampling job")
+        logger.info(f"📅 Start time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
         
         # Use Resampling intervals 3-34 if not specified
         if intervals is None:
             intervals = self.RESAMPLING_INTERVALS
+        
+        logger.info(f"📊 Will process {len(intervals)} intervals: {intervals}")
         
         # Process each interval
         total_stats = {
@@ -389,7 +456,9 @@ class DuckDBS3Resampler:
             'details': []
         }
         
-        for interval in intervals:
+        logger.info("🔄 Starting interval processing...")
+        for i, interval in enumerate(intervals, 1):
+            logger.info(f"📈 Processing interval {i}/{len(intervals)}: {interval}d")
             try:
                 interval_stats = self.process_interval(interval, s3_bucket)
                 
@@ -438,7 +507,19 @@ def main():
     
     try:
         logger.info("Starting automated AWS Batch Resampling job (DuckDB + S3 + RDS)")
+        logger.info("="*60)
+        logger.info("AWS BATCH RESAMPLER STARTUP")
+        logger.info("="*60)
+        
+        # Log environment variables for debugging
+        logger.info(f"AWS_REGION: {os.environ.get('AWS_REGION', 'Not set')}")
+        logger.info(f"S3_BUCKET_NAME: {os.environ.get('S3_BUCKET_NAME', 'Not set')}")
+        logger.info(f"RESAMPLING_INTERVALS: {os.environ.get('RESAMPLING_INTERVALS', 'Not set')}")
+        logger.info(f"RDS_SECRET_ARN: {'Set' if os.environ.get('RDS_SECRET_ARN') else 'Not set'}")
+        
+        logger.info("Initializing DuckDBS3Resampler...")
         resampler = DuckDBS3Resampler()
+        logger.info("✅ DuckDBS3Resampler initialized successfully")
         
         # Get S3 bucket from environment variable
         s3_bucket = os.environ.get('S3_BUCKET_NAME', 'dev-condvest-datalake')
@@ -447,8 +528,11 @@ def main():
         intervals_env = os.environ.get('RESAMPLING_INTERVALS', '3,5,8,13,21,34')
         intervals = [int(x.strip()) for x in intervals_env.split(',')]
         
-        logger.info(f"Processing Resampling intervals: {intervals}")
-        logger.info(f"Using S3 bucket: {s3_bucket}")
+        logger.info(f"📊 Processing Resampling intervals: {intervals}")
+        logger.info(f"🪣 Using S3 bucket: {s3_bucket}")
+        logger.info("="*60)
+        logger.info("STARTING RESAMPLING PROCESS")
+        logger.info("="*60)
         
         # Run Resampling job using DuckDB + S3 + RDS
         job_stats = resampler.run_resampling_job(s3_bucket=s3_bucket, intervals=intervals)

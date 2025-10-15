@@ -1,4 +1,4 @@
-# Fibonacci Resampler - AWS Batch Container
+# DuckDB + S3 + RDS Resampler - AWS Batch Container
 FROM python:3.11-slim
 
 # Build arguments
@@ -7,18 +7,21 @@ ARG VCS_REF
 
 # Labels for metadata
 LABEL org.label-schema.build-date=$BUILD_DATE \
-      org.label-schema.name="fibonacci-resampler" \
-      org.label-schema.description="Batch job for resampling OHLCV data using Fibonacci intervals" \
-      org.label-schema.vcs-ref=$VCS_REF \
-      org.label-schema.vcs-url="https://github.com/your-org/condvest" \
-      org.label-schema.schema-version="1.0"
+    org.label-schema.name="duckdb-s3-rds-resampler" \
+    org.label-schema.description="Batch job for resampling OHLCV data using DuckDB + S3 + RDS" \
+    org.label-schema.vcs-ref=$VCS_REF \
+    org.label-schema.vcs-url="https://github.com/your-org/condvest" \
+    org.label-schema.schema-version="1.0"
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for DuckDB and PostgreSQL
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
+    libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
