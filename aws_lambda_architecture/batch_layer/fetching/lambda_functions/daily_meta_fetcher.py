@@ -16,8 +16,6 @@ from typing import Dict, Any, List, Optional
 # Import shared utilities (no layer dependencies)
 from shared.clients.polygon_client import PolygonClient
 from shared.clients.rds_timescale_client import RDSPostgresClient
-from shared.clients.fmp_client import FMPClient
-from shared.models.data_models import BatchProcessingJob
 
 # Configure logging
 logger = logging.getLogger()

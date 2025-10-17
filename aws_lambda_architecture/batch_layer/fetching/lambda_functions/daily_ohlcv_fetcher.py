@@ -16,7 +16,7 @@ from decimal import Decimal
 
 # Import shared utilities (included in deployment package)
 from shared.clients.polygon_client import PolygonClient
-from shared.clients.rds_timescale_client import RDSTimescaleClient
+from shared.clients.rds_timescale_client import RDSPostgresClient
 from shared.models.data_models import OHLCVData, BatchProcessingJob
 
 # Configure logging
@@ -44,7 +44,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         
         # Initialize clients
         polygon_client = PolygonClient(api_key=polygon_api_key)
-        rds_client = RDSTimescaleClient(
+        rds_client = RDSPostgresClient(
             secret_arn=os.environ['RDS_SECRET_ARN']
         ) 
         # Market Status
@@ -59,15 +59,33 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         symbols = event.get('symbols', None)  # None means fetch all active symbols
         target_date = event.get('date', None)
         force_execution = event.get('force', False)
+        backfill_missing = event.get('backfill_missing', True)  # Default: auto-detect missing dates
+        max_backfill_days = int(event.get('max_backfill_days', 30))  # Limit backfill to last 30 days
         
-        # Determine target date
+        # Determine target date(s) to fetch
+        dates_to_fetch = []
         if target_date:
+            # Specific date requested
             target_date = datetime.fromisoformat(target_date).date()
+            dates_to_fetch = [target_date]
+        elif backfill_missing:
+            # Smart mode: find missing dates in database
+            logger.info("🔍 Smart backfill mode: checking for missing dates...")
+            dates_to_fetch = get_missing_dates(rds_client, max_backfill_days)
+            if not dates_to_fetch:
+                logger.info("✅ No missing dates found - database is up to date!")
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({'message': 'No missing dates - database is up to date'})
+                }
+            logger.info(f"📅 Found {len(dates_to_fetch)} missing dates to backfill: {[d.isoformat() for d in dates_to_fetch]}")
         else:
+            # Default: just fetch previous trading day
             target_date = polygon_client.get_previous_trading_day()
+            dates_to_fetch = [target_date]
         
         # Create batch job record
-        job_id = f"daily-ohlcv-{target_date.isoformat()}-{int(datetime.utcnow().timestamp())}"
+        job_id = f"daily-ohlcv-backfill-{int(datetime.utcnow().timestamp())}"
         batch_job = BatchProcessingJob(
             job_id=job_id,
             job_type='DAILY_OHLCV',
@@ -77,7 +95,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             records_processed=0
         )
         
-        logger.info(f"Starting daily OHLCV fetch for {target_date}, job_id: {job_id}")
+        logger.info(f"Starting OHLCV fetch for {len(dates_to_fetch)} date(s), job_id: {job_id}")
         
         # Get symbols to process
         if symbols is None:
@@ -86,36 +104,44 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         
         batch_job.symbols_processed = symbols
         
-        # Process symbols in batches
+        # Process each date
         batch_size = int(os.environ.get('BATCH_SIZE', '50'))
         total_records = 0
         
-        for i in range(0, len(symbols), batch_size):
-            batch_symbols = symbols[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}: {len(batch_symbols)} symbols (async)")
+        for date_idx, fetch_date in enumerate(dates_to_fetch, 1):
+            logger.info(f"📅 Processing date {date_idx}/{len(dates_to_fetch)}: {fetch_date.isoformat()}")
+            date_records = 0
             
-            try:
-                # Fetch OHLCV data for batch ASYNC (10x faster!)
-                ohlcv_data = asyncio.run(
-                    polygon_client.fetch_batch_ohlcv_data_async(
-                        batch_symbols, 
-                        target_date,
-                        max_concurrent=10  # Concurrent requests
-                    )
-                )
+            # Process symbols in batches for this date
+            for i in range(0, len(symbols), batch_size):
+                batch_symbols = symbols[i:i + batch_size]
+                logger.info(f"  Batch {i//batch_size + 1}: {len(batch_symbols)} symbols (async)")
                 
-                if ohlcv_data:
-                    # Store in RDS TimescaleDB
-                    records_inserted = rds_client.insert_ohlcv_data(ohlcv_data)
-                    total_records += records_inserted
+                try:
+                    # Fetch OHLCV data for batch ASYNC (10x faster!)
+                    ohlcv_data = asyncio.run(
+                        polygon_client.fetch_batch_ohlcv_data_async(
+                            batch_symbols, 
+                            fetch_date,
+                            max_concurrent=10  # Concurrent requests
+                        )
+                    )
                     
-                    logger.info(f"Inserted {records_inserted} records for batch (async fetch)")
-                else:
-                    logger.warning(f"No data returned for batch: {batch_symbols[:5]}...")
-            except Exception as e:  
-                logger.error(f"Error processing batch: {str(e)}")
-                # Continue with next batch rather than failing entire job
-                continue
+                    if ohlcv_data:
+                        # Store in RDS TimescaleDB
+                        records_inserted = rds_client.insert_ohlcv_data(ohlcv_data)
+                        date_records += records_inserted
+                        total_records += records_inserted
+                        
+                        logger.info(f"  Inserted {records_inserted} records for batch")
+                    else:
+                        logger.warning(f"  No data returned for batch: {batch_symbols[:5]}...")
+                except Exception as e:  
+                    logger.error(f"  Error processing batch: {str(e)}")
+                    # Continue with next batch rather than failing entire job
+                    continue
+            
+            logger.info(f"✅ Completed {fetch_date.isoformat()}: {date_records} records")
         
         # Update job status
         batch_job.status = 'COMPLETED'
@@ -125,17 +151,20 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         # Store job metadata (optional - for monitoring)
         store_job_metadata(rds_client, batch_job)
         
-        # Trigger downstream processing (Silver layer - Fibonacci resampling)
-        trigger_fibonacci_resampling_job(target_date)
+        # Trigger downstream processing (Silver layer - Fibonacci resampling) for the latest date
+        latest_date = max(dates_to_fetch) if dates_to_fetch else None
+        if latest_date:
+            trigger_fibonacci_resampling_job(latest_date)
         
-        logger.info(f"Completed daily OHLCV fetch. Total records: {total_records}")
+        logger.info(f"Completed OHLCV backfill. Total records: {total_records} across {len(dates_to_fetch)} dates")
         
         return {
             'statusCode': 200,
             'body': json.dumps({
-                'message': 'Daily OHLCV fetch completed successfully',
+                'message': 'OHLCV backfill completed successfully',
                 'job_id': job_id,
-                'date': target_date.isoformat(),
+                'dates_processed': [d.isoformat() for d in dates_to_fetch],
+                'num_dates': len(dates_to_fetch),
                 'symbols_processed': len(symbols),
                 'records_inserted': total_records,
                 'execution_time_seconds': (batch_job.end_time - batch_job.start_time).total_seconds()
@@ -160,6 +189,80 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             })
         }
 
+def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) -> List[date]:
+    """
+    Find missing trading dates in the database
+    
+    Args:
+        rds_client: RDS client instance
+        max_days_back: Maximum number of days to look back (default: 30)
+    
+    Returns:
+        List of missing dates, sorted from oldest to newest
+    """
+    try:
+        # Get the latest date in database
+        query = """
+        SELECT MAX(DATE(timestamp)) as latest_date 
+        FROM bronze_ohlcv
+        """
+        result = rds_client.execute_query(query)
+        
+        if not result or not result[0]['latest_date']:
+            # No data in database - start from 30 days ago
+            logger.info("No data found in database, starting backfill from scratch")
+            from_date = date.today() - timedelta(days=max_days_back)
+        else:
+            latest_date = result[0]['latest_date']
+            if isinstance(latest_date, str):
+                latest_date = datetime.fromisoformat(latest_date).date()
+            from_date = latest_date + timedelta(days=1)  # Start from day after latest
+        
+        # Get all trading days from from_date to yesterday
+        yesterday = date.today() - timedelta(days=1)
+        
+        if from_date > yesterday:
+            logger.info(f"Database is up to date (latest: {from_date - timedelta(days=1)})")
+            return []
+        
+        # Get actual dates that exist in database for this period
+        query = f"""
+        SELECT DISTINCT DATE(timestamp) as trade_date 
+        FROM bronze_ohlcv
+        WHERE DATE(timestamp) BETWEEN '{from_date.isoformat()}' AND '{yesterday.isoformat()}'
+        ORDER BY trade_date
+        """
+        result = rds_client.execute_query(query)
+        existing_dates = set()
+        if result:
+            for row in result:
+                trade_date = row['trade_date']
+                if isinstance(trade_date, str):
+                    trade_date = datetime.fromisoformat(trade_date).date()
+                existing_dates.add(trade_date)
+        
+        # Find missing dates (only trading days - weekdays)
+        missing_dates = []
+        current_date = from_date
+        while current_date <= yesterday:
+            # Skip weekends (Saturday=5, Sunday=6)
+            if current_date.weekday() < 5 and current_date not in existing_dates:
+                missing_dates.append(current_date)
+            current_date += timedelta(days=1)
+        
+        # Limit to max_days_back most recent missing dates
+        if len(missing_dates) > max_days_back:
+            logger.warning(f"Found {len(missing_dates)} missing dates, limiting to {max_days_back} most recent")
+            missing_dates = missing_dates[-max_days_back:]
+        
+        return missing_dates
+        
+    except Exception as e:
+        logger.error(f"Error detecting missing dates: {str(e)}")
+        # Fallback: just return yesterday
+        return [date.today() - timedelta(days=1)]
+
+
 # Fix line 98-104: Replace the fetch_ohlcv_batch function with proven logic
 def fetch_ohlcv_batch(
     polygon_client: PolygonClient, 
@@ -173,7 +276,7 @@ def fetch_ohlcv_batch(
     return polygon_client.fetch_batch_ohlcv_data(symbols, target_date)
 
 
-def store_job_metadata(rds_client: RDSTimescaleClient, batch_job: BatchProcessingJob):
+def store_job_metadata(rds_client: RDSPostgresClient, batch_job: BatchProcessingJob):
     """
     Store batch job metadata for monitoring
     """

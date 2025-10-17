@@ -61,10 +61,10 @@ build_and_deploy_lambda() {
     cat > "$package_dir/shared/clients/__init__.py" << 'EOF'
 """Client modules for Lambda functions"""
 from .polygon_client import PolygonClient
-from .rds_timescale_client import RDSTimescaleClient
+from .rds_timescale_client import RDSPostgresClient
 from .fmp_client import FMPClient
 
-__all__ = ['PolygonClient', 'RDSTimescaleClient', 'FMPClient']
+__all__ = ['PolygonClient', 'RDSPostgresClient', 'FMPClient']
 EOF
     
     # Copy models and utils

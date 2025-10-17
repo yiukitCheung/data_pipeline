@@ -109,7 +109,7 @@ class RDSPostgresClient:
         sql = """
         SELECT symbol 
         FROM symbol_metadata 
-        WHERE active = 'true'
+        WHERE active = 'True'
         ORDER BY symbol
         """
         
