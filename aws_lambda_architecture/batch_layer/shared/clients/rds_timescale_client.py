@@ -172,27 +172,46 @@ class RDSPostgresClient:
             raise
     
     def insert_silver_batch(self, table_name: str, data_tuples: List[tuple]) -> int:
-        """Execute high-performance batch insert using psycopg2.extras.execute_values"""
+        """Execute high-performance batch insert using psycopg2.extras.execute_values with batched commits"""
         try:
             import psycopg2.extras
             
-            # Create insert SQL for specific table
+            # Create insert SQL for specific table with ON CONFLICT to handle duplicates
             sql = f"""
-            INSERT INTO {table_name} (timestamp, symbol, open, high, low, close, volume)
+            INSERT INTO {table_name} (ts, symbol, open, high, low, close, volume)
             VALUES %s
+            ON CONFLICT (ts, symbol) DO NOTHING
             """
             
-            # Use psycopg2.extras.execute_values for high-performance bulk insert
-            with self.connection.cursor() as cursor:
-                psycopg2.extras.execute_values(
-                    cursor, sql, data_tuples, template=None, page_size=1000
-                )
-                records_inserted = cursor.rowcount
+            # Process in batches to avoid long transactions
+            batch_size = 100000  # Commit every 100k records
+            total_inserted = 0
             
-            return records_inserted
+            logger.info(f"Inserting {len(data_tuples)} records in batches of {batch_size}...")
+            
+            for i in range(0, len(data_tuples), batch_size):
+                batch = data_tuples[i:i + batch_size]
+                
+                # Use psycopg2.extras.execute_values for high-performance bulk insert
+                with self.connection.cursor() as cursor:
+                    psycopg2.extras.execute_values(
+                        cursor, sql, batch, template=None, page_size=5000
+                    )
+                    records_inserted = cursor.rowcount
+                    total_inserted += records_inserted
+                
+                # Commit this batch
+                self.connection.commit()
+                
+                if (i + batch_size) % 500000 == 0 or (i + batch_size) >= len(data_tuples):
+                    logger.info(f"Progress: Inserted {i + len(batch)}/{len(data_tuples)} records ({total_inserted} new records)")
+            
+            logger.info(f"Completed: Inserted {total_inserted} new records out of {len(data_tuples)} total")
+            return total_inserted
             
         except Exception as e:
             logger.error(f"Error executing batch insert into {table_name}: {str(e)}")
+            self.connection.rollback()
             raise
     
         

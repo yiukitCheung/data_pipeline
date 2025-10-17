@@ -185,32 +185,28 @@ def store_job_metadata(rds_client: RDSTimescaleClient, batch_job: BatchProcessin
 
 def trigger_fibonacci_resampling_job(target_date: datetime.date):
     """
-    Trigger the Resampling job after bronze layer completion
-    Uses AWS Batch for cost-efficient processing
+    Trigger the S3 Data Lake Resampling job after bronze layer completion
+    Uses AWS Batch for cost-efficient DuckDB + S3 processing
     """
     try:
         batch_client = boto3.client('batch')
         
-        # Submit Resampling job to AWS Batch
-        job_name = f"Resampling-{target_date.isoformat()}-{int(datetime.utcnow().timestamp())}"
+        # Submit S3 Data Lake Resampling job to AWS Batch
+        job_name = f"s3-resampler-{target_date.isoformat()}-{int(datetime.utcnow().timestamp())}"
         
         response = batch_client.submit_job(
             jobName=job_name,
-            jobQueue=os.environ['BATCH_JOB_QUEUE'],
-            jobDefinition=os.environ['RESAMPLING_JOB_DEFINITION'],
-            parameters={
-                'date': target_date.isoformat(),
-                'triggeredBy': 'bronze_layer_resampling'
-                # No CLI arguments needed - resampler uses environment variables
-            }
+            jobQueue=os.environ.get('BATCH_JOB_QUEUE', 'dev-batch-duckdb-resampler'),
+            jobDefinition=os.environ.get('RESAMPLING_JOB_DEFINITION', 'dev-batch-duckdb-resampler')
         )
         
         job_id = response['jobId']
-        logger.info(f"Triggered Resampling job {job_name} (ID: {job_id}) for {target_date}")
+        logger.info(f"✅ Triggered S3 Data Lake Resampling job {job_name} (ID: {job_id}) for {target_date}")
+        logger.info(f"📦 Resampler will write silver data to S3: s3://dev-condvest-datalake/silver/")
         
         return job_id
         
     except Exception as e:
-        logger.error(f"Error triggering Resampling job: {str(e)}")
+        logger.error(f"❌ Error triggering S3 Resampling job: {str(e)}")
         # Don't fail Bronze layer for Resampling layer trigger issues
         return None

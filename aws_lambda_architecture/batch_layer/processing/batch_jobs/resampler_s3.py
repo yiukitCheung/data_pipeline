@@ -129,13 +129,13 @@ class DuckDBS3Resampler:
         
         sql = f"""
         WITH date_boundaries AS (
-                SELECT
-                timestamp::DATE as date_val,
-                    symbol,
-                MIN(timestamp) as first_ts,
-                MAX(timestamp) as last_ts
-                FROM s3_ohlcv
-            GROUP BY timestamp::DATE, symbol
+            SELECT 
+                ts::DATE as date_val,
+                symbol,
+                MIN(ts) as first_ts,
+                MAX(ts) as last_ts
+            FROM s3_ohlcv
+            GROUP BY ts::DATE, symbol
         ),
         day_numbers AS (
             SELECT 
@@ -147,39 +147,39 @@ class DuckDBS3Resampler:
             FROM date_boundaries
         ),
         fibonacci_groups AS (
-                SELECT
+            SELECT 
                 date_val,
-                    symbol,
+                symbol,
                 first_ts,
                 last_ts,
                 day_num,
                 FLOOR((day_num - 1) / {interval}) as group_num
             FROM day_numbers
-            ),
-            aggregated AS (
-                SELECT
+        ),
+        aggregated AS (
+            SELECT 
                 MIN(fg.first_ts) as start_date,
                 fg.symbol,
-                FIRST(o.open ORDER BY o.timestamp) as open,
+                FIRST(o.open ORDER BY o.ts) as open,
                 MAX(o.high) as high,
                 MIN(o.low) as low,
-                FIRST(o.close ORDER BY o.timestamp DESC) as close,
+                FIRST(o.close ORDER BY o.ts DESC) as close,
                 SUM(o.volume) as volume
             FROM fibonacci_groups fg
             JOIN s3_ohlcv o ON fg.symbol = o.symbol 
-                AND o.timestamp >= fg.first_ts 
-                AND o.timestamp <= fg.last_ts
+                AND o.ts >= fg.first_ts 
+                AND o.ts <= fg.last_ts
             GROUP BY fg.symbol, fg.group_num
-            )
-            SELECT
+        )
+        SELECT 
             start_date AS ts,
-                symbol,
-                open,
-                high,
-                low,
-                close,
-                volume
-            FROM aggregated
+            symbol,
+            open,
+            high,
+            low,
+            close,
+            volume
+        FROM aggregated
         WHERE 1=1 {incremental_filter}
         ORDER BY ts, symbol
         """

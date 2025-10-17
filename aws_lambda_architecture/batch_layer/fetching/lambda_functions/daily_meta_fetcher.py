@@ -15,7 +15,7 @@ from typing import Dict, Any, List, Optional
 
 # Import shared utilities (no layer dependencies)
 from shared.clients.polygon_client import PolygonClient
-from shared.clients.rds_timescale_client import RDSTimescaleClient
+from shared.clients.rds_timescale_client import RDSPostgresClient
 from shared.clients.fmp_client import FMPClient
 from shared.models.data_models import BatchProcessingJob
 
@@ -116,12 +116,23 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         polygon_secret = secrets_client.get_secret_value(
             SecretId=os.environ['POLYGON_API_KEY_SECRET_ARN']
         )
-        # Get the API keys from the secrets manager
+        # Get the RDS credentials from the secrets manager
+        rds_secret = secrets_client.get_secret_value(
+            SecretId=os.environ['RDS_SECRET_ARN']
+        )
+        # Load the RDS credentials from the secrets manager
+        rds_credentials = json.loads(rds_secret['SecretString'])
+        # Load the API keys from the secrets manager
         polygon_api_key = json.loads(polygon_secret['SecretString'])['POLYGON_API_KEY']
         
         # Initialize clients
         polygon_client = PolygonClient(api_key=polygon_api_key)
-        rds_client = RDSTimescaleClient(secret_arn=os.environ['RDS_SECRET_ARN'])
+        rds_client = RDSPostgresClient(
+            endpoint=rds_credentials.get('host') or rds_credentials.get('endpoint'),
+            username=rds_credentials['username'],
+            password=rds_credentials['password'],
+            database=rds_credentials.get('dbname') or rds_credentials['database']
+        )
         
         # Parse event parameters
         symbols = event.get('symbols', None)

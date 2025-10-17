@@ -5,17 +5,15 @@ Client modules for AWS Lambda Architecture
 from .polygon_client import PolygonClient
 from .fmp_client import FMPClient
 from .aurora_client import AuroraClient  # Deprecated: use RDSTimescaleClient
-from .rds_timescale_client import RDSTimescaleClient  # Primary production client
-from .local_postgres_client import LocalPostgresClient
+from .rds_timescale_client import RDSPostgresClient  # Primary production client
 from .kinesis_client import KinesisClient
 from .redis_client import RedisClient
 
 __all__ = [
     'PolygonClient',
     'FMPClient',
-    'RDSTimescaleClient',  # Primary client for production
+    'RDSPostgresClient',  # Primary client for production
     'AuroraClient',        # Kept for backward compatibility
-    'LocalPostgresClient',
     'KinesisClient',
     'RedisClient'
 ]
