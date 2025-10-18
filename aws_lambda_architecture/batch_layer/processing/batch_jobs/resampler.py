@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional
 import boto3
 import json
+from botocore.exceptions import ClientError
 
 # Configure logging
 logging.basicConfig(
@@ -95,19 +96,33 @@ class DuckDBS3Resampler:
             raise
     
     def create_s3_view(self, s3_bucket: str, s3_prefix: str = "public/raw_ohlcv"):
-        """Create a DuckDB view that reads from S3 parquet files"""
+        """Create a DuckDB view that reads from S3 parquet files
+        
+        NOTE: AWS DMS migration adds 'timestamp' column for tracking.
+        The actual data timestamp is in 'timestamp_1' column!
+        """
         try:
             s3_path = f"s3://{s3_bucket}/{s3_prefix}/*.parquet"
             logger.info(f"Creating DuckDB view for S3 path: {s3_path}")
             
-            # Create view
+            # Create view with column mapping
+            # AWS DMS creates 'timestamp' for migration tracking, data is in 'timestamp_1'
             create_view_sql = f"""
             CREATE OR REPLACE VIEW s3_ohlcv AS 
-            SELECT * FROM read_parquet('{s3_path}')
+            SELECT 
+                symbol,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                timestamp_1 as timestamp,  -- AWS DMS: actual data timestamp
+                interval
+            FROM read_parquet('{s3_path}')
             """
             
             self.duckdb_conn.execute(create_view_sql)
-            logger.info(f"DuckDB view 's3_ohlcv' created successfully")
+            logger.info(f"DuckDB view 's3_ohlcv' created successfully (using timestamp_1 as timestamp)")
             
         except Exception as e:
             logger.error(f"Error creating S3 view: {str(e)}")
@@ -186,41 +201,223 @@ class DuckDBS3Resampler:
         
         return sql
     
-    def _get_latest_timestamp_from_s3(self, s3_prefix: str) -> Optional[str]:
-        """Get the latest timestamp from existing S3 silver data for incremental processing"""
-        try:
-            s3_path = f"s3://{self.s3_bucket}/{s3_prefix}/*.parquet"
+    def _read_checkpoint(self, interval: int) -> Optional[Dict]:
+        """
+        Read checkpoint file from S3 to determine what's been processed
+        
+        Checkpoint file structure:
+        {
+            "last_processed_date": "2025-09-22",
+            "last_run_timestamp": "2025-09-23T02:00:00Z",
+            "total_records_processed": 5350,
+            "status": "completed"
+        }
+        
+        Args:
+            interval: The Fibonacci interval (3, 5, 8, etc.)
             
-            # Check if any parquet files exist
+        Returns:
+            Checkpoint dict or None if checkpoint doesn't exist
+        """
+        checkpoint_key = f"processing_metadata/silver_{interval}d_checkpoint.json"
+        
+        try:
+            logger.info(f"🔍 Checking for checkpoint file: s3://{self.s3_bucket}/{checkpoint_key}")
+            
+            response = self.s3_client.get_object(
+                Bucket=self.s3_bucket,
+                Key=checkpoint_key
+            )
+            
+            checkpoint_data = json.loads(response['Body'].read().decode('utf-8'))
+            
+            # Validate checkpoint has required fields
+            if not checkpoint_data or 'last_processed_date' not in checkpoint_data:
+                logger.warning("⚠️  Checkpoint file exists but is empty or invalid")
+                return None
+            
+            logger.info(f"✅ Found checkpoint file:")
+            logger.info(f"   - Last processed date: {checkpoint_data.get('last_processed_date')}")
+            logger.info(f"   - Last run: {checkpoint_data.get('last_run_timestamp', 'N/A')}")
+            logger.info(f"   - Total records: {checkpoint_data.get('total_records_processed', 'N/A')}")
+            logger.info(f"   - Status: {checkpoint_data.get('status', 'N/A')}")
+            
+            return checkpoint_data
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'NoSuchKey':
+                logger.info(f"✅ No checkpoint file found (first run)")
+                logger.info(f"   Will perform FULL resampling and create checkpoint")
+                return None
+            else:
+                logger.warning(f"⚠️  Error reading checkpoint: {str(e)}")
+                return None
+        except json.JSONDecodeError as e:
+            logger.warning(f"⚠️  Checkpoint file is not valid JSON: {str(e)}")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️  Unexpected error reading checkpoint: {str(e)}")
+            return None
+    
+    def _write_checkpoint(self, interval: int, latest_date: str, total_records: int, status: str = "completed"):
+        """
+        Write checkpoint file to S3 after successful processing
+        
+        Args:
+            interval: The Fibonacci interval (3, 5, 8, etc.)
+            latest_date: The latest date that was processed
+            total_records: Total records processed in this run
+            status: Processing status (completed, failed, etc.)
+        """
+        checkpoint_key = f"processing_metadata/silver_{interval}d_checkpoint.json"
+        
+        checkpoint_data = {
+            "last_processed_date": latest_date,
+            "last_run_timestamp": datetime.now().isoformat(),
+            "total_records_processed": total_records,
+            "status": status,
+            "interval": f"{interval}d"
+        }
+        
+        try:
+            logger.info(f"📝 Writing checkpoint file: s3://{self.s3_bucket}/{checkpoint_key}")
+            
+            self.s3_client.put_object(
+                Bucket=self.s3_bucket,
+                Key=checkpoint_key,
+                Body=json.dumps(checkpoint_data, indent=2),
+                ContentType='application/json'
+            )
+            
+            logger.info(f"✅ Checkpoint file updated successfully")
+            logger.info(f"   - Last processed date: {latest_date}")
+            logger.info(f"   - Records in this run: {total_records}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error writing checkpoint file: {str(e)}")
+            logger.warning("⚠️  Processing completed but checkpoint not saved!")
+            # Don't raise - processing succeeded even if checkpoint failed
+    
+    def _get_latest_timestamp_from_checkpoint(self, interval: int, force_full_resample: bool = False) -> Optional[str]:
+        """
+        Get the latest processed timestamp from checkpoint file (NEW APPROACH)
+        
+        This is cleaner than querying output files because:
+        - Clear separation of concerns (tracking vs output)
+        - Easy to reset (just delete checkpoint)
+        - Can track additional metadata
+        - No risk of sync issues
+        
+        Args:
+            interval: The Fibonacci interval
+            force_full_resample: If True, ignore checkpoint and do full resample
+            
+        Returns:
+            Latest timestamp string or None for full resample
+        """
+        if force_full_resample:
+            logger.info("⚠️  FORCE_FULL_RESAMPLE enabled - ignoring checkpoint")
+            return None
+        
+        checkpoint = self._read_checkpoint(interval)
+        
+        if not checkpoint:
+            logger.info("🔄 No checkpoint found → FULL RESAMPLE mode")
+            return None
+        
+        latest_date = checkpoint.get('last_processed_date')
+        if not latest_date:
+            logger.warning("⚠️  Checkpoint missing last_processed_date → FULL RESAMPLE mode")
+            return None
+        
+        logger.info(f"⚡ INCREMENTAL MODE: Will process data after {latest_date}")
+        return latest_date
+    
+    def _get_latest_timestamp_from_s3_output(self, s3_prefix: str, force_full_resample: bool = False) -> Optional[str]:
+        """
+        FALLBACK: Get latest timestamp from output files (OLD APPROACH)
+        
+        This is kept for backward compatibility if checkpoint files don't exist yet.
+        The checkpoint-based approach is preferred.
+        
+        Args:
+            s3_prefix: The S3 prefix to check (e.g., 'silver/silver_3d')
+            force_full_resample: If True, skip incremental logic and resample all data
+        
+        Returns:
+            Latest timestamp string or None for full resample
+        """
+        if force_full_resample:
+            logger.info("⚠️  FORCE_FULL_RESAMPLE enabled - ignoring output files")
+            return None
+        
+        logger.info("📋 Using FALLBACK mode: checking output files directly")
+            
+        try:
+            # Log the exact path we're checking
+            logger.info(f"🔍 Checking output files in: s3://{self.s3_bucket}/{s3_prefix}/")
+            
+            # Check if any parquet files exist in the PROCESSED (silver) folder
             response = self.s3_client.list_objects_v2(
                 Bucket=self.s3_bucket,
                 Prefix=s3_prefix,
-                MaxKeys=1
+                MaxKeys=10  # Get a few files to show what exists
             )
             
             if 'Contents' not in response:
-                logger.info(f"No existing data found in s3://{self.s3_bucket}/{s3_prefix}/")
+                logger.info(f"✅ No existing processed data found - will perform FULL resampling of all raw data")
                 return None
             
+            # Log what files we found
+            file_count = len(response['Contents'])
+            logger.info(f"📦 Found {file_count} existing processed files in silver layer")
+            for i, obj in enumerate(response['Contents'][:3]):  # Show first 3 files
+                logger.info(f"   - {obj['Key']} (size: {obj['Size']} bytes)")
+            if file_count > 3:
+                logger.info(f"   ... and {file_count - 3} more files")
+            
             # Query the max timestamp from existing parquet files
+            s3_path = f"s3://{self.s3_bucket}/{s3_prefix}/**/*.parquet"
+            logger.info(f"🔍 Querying latest timestamp from: {s3_path}")
+            
             query = f"""
-            SELECT MAX(ts) as latest_timestamp 
+            SELECT 
+                MAX(ts) as latest_timestamp,
+                MIN(ts) as earliest_timestamp,
+                COUNT(*) as total_records
             FROM read_parquet('{s3_path}')
             """
             
             result = self.duckdb_conn.execute(query).fetchone()
             if result and result[0]:
                 latest_timestamp = result[0]
+                earliest_timestamp = result[1]
+                total_records = result[2]
+                
                 # Convert to string format for SQL comparison
                 if isinstance(latest_timestamp, str):
-                    return latest_timestamp
+                    latest_ts_str = latest_timestamp
                 else:
-                    return latest_timestamp.strftime('%Y-%m-%d')
+                    latest_ts_str = latest_timestamp.strftime('%Y-%m-%d')
+                
+                if isinstance(earliest_timestamp, str):
+                    earliest_ts_str = earliest_timestamp
+                else:
+                    earliest_ts_str = earliest_timestamp.strftime('%Y-%m-%d')
+                
+                logger.info(f"📊 Existing processed data summary:")
+                logger.info(f"   - Date range: {earliest_ts_str} to {latest_ts_str}")
+                logger.info(f"   - Total records: {total_records:,}")
+                logger.info(f"⚡ INCREMENTAL MODE: Will only process data AFTER {latest_ts_str}")
+                
+                return latest_ts_str
             else:
+                logger.warning(f"Could not read timestamp from existing files")
                 return None
                 
         except Exception as e:
-            logger.warning(f"Could not get latest timestamp from S3: {str(e)}")
+            logger.warning(f"⚠️  Error checking for existing data: {str(e)}")
             logger.info("Proceeding with full resampling")
             return None
     
@@ -258,24 +455,66 @@ class DuckDBS3Resampler:
             logger.error(f"Error writing to S3: {str(e)}")
             raise
     
-    def process_interval(self, interval: int, s3_input_bucket: str) -> Dict:
-        """Process a single resampling interval using DuckDB + S3 (write to S3)"""
+    def process_interval(self, interval: int, s3_input_bucket: str, force_full_resample: bool = False) -> Dict:
+        """
+        Process a single resampling interval using DuckDB + S3 (write to S3)
+        
+        Args:
+            interval: Fibonacci interval (3, 5, 8, 13, 21, 34)
+            s3_input_bucket: S3 bucket containing raw OHLCV data
+            force_full_resample: If True, reprocess ALL data (ignore existing silver data)
+        """
         start_time = time.time()
         output_prefix = f"{self.s3_output_prefix}/silver_{interval}d"
         
-        logger.info(f"Processing interval {interval}d → s3://{self.s3_bucket}/{output_prefix}/")
+        logger.info("=" * 70)
+        logger.info(f"📈 PROCESSING INTERVAL: {interval}d")
+        logger.info("=" * 70)
+        logger.info(f"Output: s3://{self.s3_bucket}/{output_prefix}/")
         
-        # Create S3 view in DuckDB for reading bronze data
-        self.create_s3_view(s3_input_bucket)
+        # Create S3 view in DuckDB for reading bronze (raw) data
+        raw_data_prefix = "public/raw_ohlcv"
+        logger.info(f"📥 Reading raw data from: s3://{s3_input_bucket}/{raw_data_prefix}/")
+        self.create_s3_view(s3_input_bucket, raw_data_prefix)
         
-        # Check if we have existing silver data in S3 for incremental processing
-        latest_timestamp = self._get_latest_timestamp_from_s3(output_prefix)
+        # Get stats on raw data source
+        try:
+            raw_stats_query = """
+            SELECT 
+                MIN(timestamp) as earliest_date,
+                MAX(timestamp) as latest_date,
+                COUNT(*) as total_records,
+                COUNT(DISTINCT symbol) as unique_symbols,
+                COUNT(DISTINCT timestamp::DATE) as unique_dates
+            FROM s3_ohlcv
+            """
+            raw_stats = self.duckdb_conn.execute(raw_stats_query).fetchone()
+            if raw_stats:
+                logger.info(f"📊 RAW DATA STATISTICS:")
+                logger.info(f"   - Date range: {raw_stats[0]} to {raw_stats[1]}")
+                logger.info(f"   - Total records: {raw_stats[2]:,}")
+                logger.info(f"   - Unique symbols: {raw_stats[3]:,}")
+                logger.info(f"   - Unique dates: {raw_stats[4]:,}")
+        except Exception as e:
+            logger.warning(f"Could not get raw data stats: {str(e)}")
+        
+        # NEW APPROACH: Check checkpoint file first (preferred)
+        # FALLBACK: Query output files if checkpoint doesn't exist
+        logger.info("\n" + "=" * 70)
+        logger.info("CHECKING PROCESSING CHECKPOINT")
+        logger.info("=" * 70)
+        
+        latest_timestamp = self._get_latest_timestamp_from_checkpoint(interval, force_full_resample)
+        
+        # Fallback to querying output files if no checkpoint exists
+        if latest_timestamp is None and not force_full_resample:
+            logger.info("\n💡 Checkpoint not found, trying fallback: query output files...")
+            latest_timestamp = self._get_latest_timestamp_from_s3_output(output_prefix, force_full_resample)
         
         if latest_timestamp:
-            logger.info(f"Found existing data in s3://{self.s3_bucket}/{output_prefix}/, latest timestamp: {latest_timestamp}")
-            logger.info(f"Resampling ALL data, then filtering for data after {latest_timestamp}")
+            logger.info(f"📍 INCREMENTAL mode: Processing only data after {latest_timestamp}")
         else:
-            logger.info(f"No existing data in S3, performing full resampling")
+            logger.info(f"🔄 FULL RESAMPLE mode: Processing ALL raw data")
         
         # Generate DuckDB resampling SQL with incremental filter
         resampling_sql = self.get_fibonacci_resampling_sql(interval, latest_timestamp)
@@ -303,11 +542,23 @@ class DuckDBS3Resampler:
             logger.info(f"Writing {records_count} records to S3 as Parquet...")
             self._write_to_s3_parquet(df, output_prefix, interval)
             
+            # Get the latest date from the processed data
+            latest_processed_date = df['ts'].max()
+            if isinstance(latest_processed_date, pd.Timestamp):
+                latest_processed_date = latest_processed_date.strftime('%Y-%m-%d')
+            elif not isinstance(latest_processed_date, str):
+                latest_processed_date = str(latest_processed_date)
+            
+            # Write checkpoint file to track what's been processed
+            logger.info(f"\n📝 Updating checkpoint...")
+            self._write_checkpoint(interval, latest_processed_date, records_count, "completed")
+            
             end_time = time.time()
             execution_time = end_time - start_time
             
-            logger.info(f"✅ Completed {interval}d: {records_count} records in {execution_time:.2f}s")
+            logger.info(f"\n✅ Completed {interval}d: {records_count} records in {execution_time:.2f}s")
             logger.info(f"📦 Output: s3://{self.s3_bucket}/{output_prefix}/")
+            logger.info(f"📝 Checkpoint: s3://{self.s3_bucket}/processing_metadata/silver_{interval}d_checkpoint.json")
             
             return {
                 'interval': interval,
@@ -328,33 +579,41 @@ class DuckDBS3Resampler:
             logger.info("DuckDB connection closed")
 
 
-def run_resampling_job(s3_bucket: str, intervals: List[int] = None):
-    """Run resampling job for specified intervals"""
+def run_resampling_job(s3_bucket: str, intervals: List[int] = None, force_full_resample: bool = False):
+    """
+    Run resampling job for specified intervals
+    
+    Args:
+        s3_bucket: S3 bucket containing raw data and where to write silver data
+        intervals: List of Fibonacci intervals to process (default: [3, 5, 8, 13, 21, 34])
+        force_full_resample: If True, reprocess ALL data (ignore existing silver data)
+    """
     if intervals is None:
         intervals = DuckDBS3Resampler.RESAMPLING_INTERVALS
     
-    logger.info("============================================================")
-    logger.info("STARTING RESAMPLING PROCESS")
-    logger.info("============================================================")
-    logger.info(f"🚀 Starting DuckDB + S3 Data Lake Resampling job")
+    logger.info("=" * 80)
+    logger.info("🚀 STARTING RESAMPLING PROCESS")
+    logger.info("=" * 80)
     logger.info(f"📅 Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"📊 Will process {len(intervals)} intervals: {intervals}")
+    logger.info(f"📊 Intervals to process: {intervals}")
+    logger.info(f"🔄 Mode: {'FULL RESAMPLE (all data)' if force_full_resample else 'INCREMENTAL (new data only)'}")
+    logger.info(f"🪣 S3 Bucket: {s3_bucket}")
     
     try:
         resampler = DuckDBS3Resampler(s3_bucket=s3_bucket)
         
         results = []
-        logger.info("🔄 Starting interval processing...")
+        logger.info("\n🔄 Starting interval processing...")
         
         for idx, interval in enumerate(intervals, 1):
-            logger.info(f"📈 Processing interval {idx}/{len(intervals)}: {interval}d")
-            result = resampler.process_interval(interval, s3_bucket)
+            logger.info(f"\n📈 [{idx}/{len(intervals)}] Processing interval: {interval}d")
+            result = resampler.process_interval(interval, s3_bucket, force_full_resample)
             results.append(result)
             
             # Log progress
             completed = idx
             remaining = len(intervals) - idx
-            logger.info(f"Progress: {completed}/{len(intervals)} completed, {remaining} remaining")
+            logger.info(f"✅ Progress: {completed}/{len(intervals)} completed, {remaining} remaining\n")
         
         # Close connections
         resampler.close()
@@ -363,32 +622,34 @@ def run_resampling_job(s3_bucket: str, intervals: List[int] = None):
         total_records = sum(r['records_processed'] for r in results)
         total_time = sum(r['execution_time'] for r in results)
         
-        logger.info("============================================================")
-        logger.info("RESAMPLING JOB COMPLETED SUCCESSFULLY")
-        logger.info("============================================================")
+        logger.info("=" * 80)
+        logger.info("🎉 RESAMPLING JOB COMPLETED SUCCESSFULLY")
+        logger.info("=" * 80)
         logger.info(f"✅ Processed {len(intervals)} intervals")
         logger.info(f"📊 Total records: {total_records:,}")
         logger.info(f"⏱️  Total time: {total_time:.2f}s")
         logger.info(f"📦 Output location: s3://{s3_bucket}/silver/")
+        logger.info("=" * 80)
         
         return results
         
     except Exception as e:
-        logger.error(f"Fatal error in AWS Batch Resampling job: {str(e)}")
+        logger.error(f"❌ Fatal error in AWS Batch Resampling job: {str(e)}")
         raise
 
 
 def main():
     """Main entry point for AWS Batch job"""
-    logger.info("Starting automated AWS Batch Resampling job (DuckDB + S3 Data Lake)")
-    logger.info("============================================================")
+    logger.info("=" * 80)
     logger.info("AWS BATCH RESAMPLER STARTUP")
-    logger.info("============================================================")
+    logger.info("=" * 80)
+    logger.info("Starting automated AWS Batch Resampling job (DuckDB + S3 Data Lake)")
     
     # Get configuration from environment variables
     aws_region = os.environ.get('AWS_REGION', 'ca-west-1')
     s3_bucket = os.environ.get('S3_BUCKET_NAME', 'dev-condvest-datalake')
     intervals_env = os.environ.get('RESAMPLING_INTERVALS', '3,5,8,13,21,34')
+    force_full_resample_env = os.environ.get('FORCE_FULL_RESAMPLE', 'false').lower()
     
     # Parse intervals
     try:
@@ -397,20 +658,28 @@ def main():
         logger.error(f"Invalid RESAMPLING_INTERVALS format: {intervals_env}")
         raise
     
-    logger.info(f"AWS_REGION: {aws_region}")
-    logger.info(f"S3_BUCKET_NAME: {s3_bucket}")
-    logger.info(f"RESAMPLING_INTERVALS: {intervals_env}")
-    logger.info(f"Initializing DuckDBS3Resampler...")
+    # Parse force_full_resample flag
+    force_full_resample = force_full_resample_env in ('true', '1', 'yes')
+    
+    logger.info("📋 CONFIGURATION:")
+    logger.info(f"   AWS_REGION: {aws_region}")
+    logger.info(f"   S3_BUCKET_NAME: {s3_bucket}")
+    logger.info(f"   RESAMPLING_INTERVALS: {intervals}")
+    logger.info(f"   FORCE_FULL_RESAMPLE: {force_full_resample}")
+    
+    if force_full_resample:
+        logger.warning("⚠️  FORCE_FULL_RESAMPLE is enabled!")
+        logger.warning("⚠️  This will reprocess ALL data, ignoring existing silver data")
+        logger.warning("⚠️  This may take longer and use more compute resources")
     
     try:
-        logger.info("✅ DuckDBS3Resampler initialized successfully")
-        logger.info(f"📊 Processing Resampling intervals: {intervals}")
-        logger.info(f"🪣 Using S3 bucket: {s3_bucket}")
+        logger.info("\n✅ Starting DuckDB + S3 Resampler...")
         
         # Run the resampling job
         results = run_resampling_job(
             s3_bucket=s3_bucket,
-            intervals=intervals
+            intervals=intervals,
+            force_full_resample=force_full_resample
         )
         
         logger.info("🎉 AWS Batch Resampling job completed successfully!")
@@ -418,6 +687,8 @@ def main():
         
     except Exception as e:
         logger.error(f"❌ AWS Batch Resampling job failed: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise
 
 
