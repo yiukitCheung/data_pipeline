@@ -2,6 +2,10 @@
 AWS Lambda function for daily OHLCV data fetching
 Replaces the Prefect bronze pipeline with serverless AWS approach
 Now with async support for 10x faster fetching!
+
+NEW ARCHITECTURE:
+1. Write to S3 bronze layer (SOURCE OF TRUTH, all historical data)
+2. Write to RDS (FAST QUERY CACHE, last 3 years only)
 """
 
 import json
@@ -13,6 +17,10 @@ from datetime import datetime, timedelta, date
 from typing import Dict, Any, List
 import os
 from decimal import Decimal
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from io import BytesIO
 
 # Import shared utilities (included in deployment package)
 from shared.clients.polygon_client import PolygonClient
@@ -22,6 +30,10 @@ from shared.models.data_models import OHLCVData, BatchProcessingJob
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# S3 Configuration
+S3_BUCKET = os.environ.get('S3_DATALAKE_BUCKET', 'dev-condvest-datalake')
+S3_BRONZE_PREFIX = 'bronze/raw_ohlcv'
 
 
 def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
@@ -128,12 +140,20 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                     )
                     
                     if ohlcv_data:
-                        # Store in RDS TimescaleDB
-                        records_inserted = rds_client.insert_ohlcv_data(ohlcv_data)
+                        # NEW ARCHITECTURE: Write to S3 first (SOURCE OF TRUTH)
+                        s3_records = write_to_s3_bronze(ohlcv_data, fetch_date)
+                        logger.info(f"  ✅ Wrote {s3_records} records to S3 bronze layer")
+                        
+                        # Then write to RDS (FAST QUERY CACHE - last 3 years only)
+                        records_inserted = write_to_rds_with_retention(
+                            rds_client, 
+                            ohlcv_data, 
+                            retention_years=3
+                        )
+                        logger.info(f"  ✅ Inserted {records_inserted} records to RDS")
+                        
                         date_records += records_inserted
                         total_records += records_inserted
-                        
-                        logger.info(f"  Inserted {records_inserted} records for batch")
                     else:
                         logger.warning(f"  No data returned for batch: {batch_symbols[:5]}...")
                 except Exception as e:  
@@ -191,55 +211,60 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
 
 def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) -> List[date]:
     """
-    Find missing trading dates in the database
+    Find missing trading dates by checking S3 bronze layer (SOURCE OF TRUTH)
+    
+    NEW APPROACH: Check S3 for existing dates instead of RDS
     
     Args:
-        rds_client: RDS client instance
+        rds_client: RDS client instance (not used, kept for backward compatibility)
         max_days_back: Maximum number of days to look back (default: 30)
     
     Returns:
         List of missing dates, sorted from oldest to newest
     """
     try:
-        # Get the latest date in database
-        query = """
-        SELECT MAX(DATE(timestamp)) as latest_date 
-        FROM bronze_ohlcv
-        """
-        result = rds_client.execute_query(query)
+        s3_client = boto3.client('s3')
         
-        if not result or not result[0]['latest_date']:
-            # No data in database - start from 30 days ago
-            logger.info("No data found in database, starting backfill from scratch")
+        # Get all existing dates from S3 bronze layer
+        # List all files under bronze/raw_ohlcv/symbol=*/date=*.parquet
+        logger.info(f"🔍 Checking S3 bronze layer for existing dates...")
+        
+        existing_dates = set()
+        paginator = s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(
+            Bucket=S3_BUCKET,
+            Prefix=f"{S3_BRONZE_PREFIX}/symbol="
+        )
+        
+        for page in pages:
+            if 'Contents' not in page:
+                continue
+            
+            for obj in page['Contents']:
+                # Extract date from key: bronze/raw_ohlcv/symbol=AAPL/date=2025-10-18.parquet
+                key = obj['Key']
+                if '/date=' in key and key.endswith('.parquet'):
+                    try:
+                        date_str = key.split('/date=')[1].replace('.parquet', '')
+                        existing_dates.add(datetime.fromisoformat(date_str).date())
+                    except:
+                        continue  # Skip malformed keys
+        
+        if not existing_dates:
+            # No data in S3 - start from 30 days ago
+            logger.info("⚠️  No data found in S3 bronze layer, starting fresh backfill")
             from_date = date.today() - timedelta(days=max_days_back)
         else:
-            latest_date = result[0]['latest_date']
-            if isinstance(latest_date, str):
-                latest_date = datetime.fromisoformat(latest_date).date()
+            latest_date = max(existing_dates)
+            logger.info(f"✅ Found data in S3, latest date: {latest_date}")
             from_date = latest_date + timedelta(days=1)  # Start from day after latest
         
         # Get all trading days from from_date to yesterday
         yesterday = date.today() - timedelta(days=1)
         
         if from_date > yesterday:
-            logger.info(f"Database is up to date (latest: {from_date - timedelta(days=1)})")
+            logger.info(f"✅ S3 bronze layer is up to date (latest: {from_date - timedelta(days=1)})")
             return []
-        
-        # Get actual dates that exist in database for this period
-        query = f"""
-        SELECT DISTINCT DATE(timestamp) as trade_date 
-        FROM bronze_ohlcv
-        WHERE DATE(timestamp) BETWEEN '{from_date.isoformat()}' AND '{yesterday.isoformat()}'
-        ORDER BY trade_date
-        """
-        result = rds_client.execute_query(query)
-        existing_dates = set()
-        if result:
-            for row in result:
-                trade_date = row['trade_date']
-                if isinstance(trade_date, str):
-                    trade_date = datetime.fromisoformat(trade_date).date()
-                existing_dates.add(trade_date)
         
         # Find missing dates (only trading days - weekdays)
         missing_dates = []
@@ -255,10 +280,13 @@ def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) ->
             logger.warning(f"Found {len(missing_dates)} missing dates, limiting to {max_days_back} most recent")
             missing_dates = missing_dates[-max_days_back:]
         
+        logger.info(f"📋 Missing dates to fetch: {len(missing_dates)}")
+        
         return missing_dates
         
     except Exception as e:
-        logger.error(f"Error detecting missing dates: {str(e)}")
+        logger.error(f"❌ Error detecting missing dates from S3: {str(e)}")
+        logger.warning("⚠️  Falling back to fetch yesterday only")
         # Fallback: just return yesterday
         return [date.today() - timedelta(days=1)]
 
@@ -313,3 +341,136 @@ def trigger_fibonacci_resampling_job(target_date: datetime.date):
         logger.error(f"❌ Error triggering S3 Resampling job: {str(e)}")
         # Don't fail Bronze layer for Resampling layer trigger issues
         return None
+
+
+def write_to_s3_bronze(ohlcv_data: List[OHLCVData], fetch_date: date) -> int:
+    """
+    Write OHLCV data to S3 bronze layer (SOURCE OF TRUTH)
+    
+    Partitioning strategy: By symbol
+    Path format: s3://bucket/bronze/raw_ohlcv/symbol=AAPL/date=2025-10-18.parquet
+    
+    Args:
+        ohlcv_data: List of OHLCV data objects
+        fetch_date: Date for which data was fetched
+    
+    Returns:
+        Number of records written
+    """
+    if not ohlcv_data:
+        return 0
+    
+    try:
+        s3_client = boto3.client('s3')
+        
+        # Convert OHLCV data to DataFrame
+        records = []
+        for ohlcv in ohlcv_data:
+            records.append({
+                'symbol': ohlcv.symbol,
+                'open': float(ohlcv.open),
+                'high': float(ohlcv.high),
+                'low': float(ohlcv.low),
+                'close': float(ohlcv.close),
+                'volume': int(ohlcv.volume),
+                'timestamp': ohlcv.timestamp,
+                'interval': ohlcv.interval
+            })
+        
+        df = pd.DataFrame(records)
+        
+        # Group by symbol for partitioning
+        records_written = 0
+        for symbol, symbol_df in df.groupby('symbol'):
+            # S3 key: bronze/raw_ohlcv/symbol=AAPL/date=2025-10-18.parquet
+            s3_key = f"{S3_BRONZE_PREFIX}/symbol={symbol}/date={fetch_date.isoformat()}.parquet"
+            
+            # Convert to parquet in memory
+            table = pa.Table.from_pandas(symbol_df)
+            parquet_buffer = BytesIO()
+            pq.write_table(table, parquet_buffer, compression='snappy')
+            parquet_buffer.seek(0)
+            
+            # Check if file already exists (deduplication)
+            try:
+                s3_client.head_object(Bucket=S3_BUCKET, Key=s3_key)
+                logger.info(f"  ⚠️  File already exists, overwriting: s3://{S3_BUCKET}/{s3_key}")
+            except:
+                pass  # File doesn't exist, continue
+            
+            # Write to S3
+            s3_client.put_object(
+                Bucket=S3_BUCKET,
+                Key=s3_key,
+                Body=parquet_buffer.getvalue(),
+                ContentType='application/x-parquet'
+            )
+            
+            records_written += len(symbol_df)
+            logger.debug(f"  📦 Wrote {len(symbol_df)} records for {symbol} to S3")
+        
+        logger.info(f"✅ Successfully wrote {records_written} records to S3 bronze layer")
+        logger.info(f"   Location: s3://{S3_BUCKET}/{S3_BRONZE_PREFIX}/")
+        
+        return records_written
+        
+    except Exception as e:
+        logger.error(f"❌ Error writing to S3 bronze layer: {str(e)}")
+        raise  # Re-raise to fail the Lambda if S3 write fails (critical)
+
+
+def write_to_rds_with_retention(
+    rds_client: RDSPostgresClient, 
+    ohlcv_data: List[OHLCVData],
+    retention_years: int = 3
+) -> int:
+    """
+    Write OHLCV data to RDS with retention policy (FAST QUERY CACHE)
+    Only keeps last N years of data in RDS for fast queries
+    
+    NOTE: Weekly archival procedure (archive_old_ohlcv_data) handles cleanup
+    This function just inserts data normally, archival runs separately
+    
+    Args:
+        rds_client: RDS client instance
+        ohlcv_data: List of OHLCV data objects
+        retention_years: Number of years to keep in RDS (default: 3)
+    
+    Returns:
+        Number of records inserted
+    """
+    if not ohlcv_data:
+        return 0
+    
+    try:
+        # Filter out data older than retention period (shouldn't happen for daily fetcher)
+        retention_threshold = date.today() - timedelta(days=365 * retention_years + 30)  # +1 month buffer
+        
+        filtered_data = [
+            ohlcv for ohlcv in ohlcv_data 
+            if ohlcv.timestamp.date() >= retention_threshold
+        ]
+        
+        if len(filtered_data) < len(ohlcv_data):
+            logger.warning(
+                f"⚠️  Filtered out {len(ohlcv_data) - len(filtered_data)} records "
+                f"older than {retention_threshold} (outside retention period)"
+            )
+        
+        if not filtered_data:
+            logger.info("ℹ️  No records within retention period, skipping RDS insert")
+            return 0
+        
+        # Insert to RDS (uses UPSERT internally to handle duplicates)
+        records_inserted = rds_client.insert_ohlcv_data(filtered_data)
+        
+        logger.info(f"✅ Inserted {records_inserted} records to RDS (retention: {retention_years} years)")
+        
+        return records_inserted
+        
+    except Exception as e:
+        logger.error(f"❌ Error writing to RDS: {str(e)}")
+        # Don't fail Lambda if RDS write fails (S3 is source of truth)
+        # But log it prominently for monitoring
+        logger.error("⚠️  RDS write failed, but S3 write succeeded (data not lost)")
+        return 0

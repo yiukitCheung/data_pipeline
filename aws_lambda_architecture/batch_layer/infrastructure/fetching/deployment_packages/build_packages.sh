@@ -4,8 +4,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FETCHING_DIR="$(dirname "$SCRIPT_DIR")"
-SHARED_DIR="$(dirname "$(dirname "$FETCHING_DIR")")/shared"
+# Point to batch_layer/fetching (application code) not infrastructure/fetching
+BATCH_LAYER_DIR="$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
+FETCHING_DIR="$BATCH_LAYER_DIR/fetching"
+SHARED_DIR="$(dirname "$BATCH_LAYER_DIR")/shared"
 
 echo "🔧 Building Lambda deployment packages for fetching component..."
 

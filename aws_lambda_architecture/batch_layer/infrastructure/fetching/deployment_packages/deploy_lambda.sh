@@ -4,9 +4,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FETCHING_DIR="$(dirname "$SCRIPT_DIR")"
-BATCH_LAYER_DIR="$(dirname "$FETCHING_DIR")"
-SHARED_DIR="$BATCH_LAYER_DIR/shared"
+# Point to batch_layer/fetching (application code) not infrastructure/fetching
+INFRA_FETCHING_DIR="$(dirname "$SCRIPT_DIR")"
+BATCH_LAYER_DIR="$(dirname "$(dirname "$INFRA_FETCHING_DIR")")"
+FETCHING_DIR="$BATCH_LAYER_DIR/fetching"
+SHARED_DIR="$(dirname "$BATCH_LAYER_DIR")/shared"
 
 # AWS Configuration
 AWS_REGION="${AWS_REGION:-ca-west-1}"
