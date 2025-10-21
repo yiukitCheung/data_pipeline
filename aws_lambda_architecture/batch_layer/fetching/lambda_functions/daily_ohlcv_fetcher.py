@@ -5,7 +5,7 @@ Now with async support for 10x faster fetching!
 
 NEW ARCHITECTURE:
 1. Write to S3 bronze layer (SOURCE OF TRUTH, all historical data)
-2. Write to RDS (FAST QUERY CACHE, last 3 years only)
+2. Write to RDS (FAST QUERY CACHE, last 5 years only)
 """
 
 import json
@@ -144,11 +144,11 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                         s3_records = write_to_s3_bronze(ohlcv_data, fetch_date)
                         logger.info(f"  ✅ Wrote {s3_records} records to S3 bronze layer")
                         
-                        # Then write to RDS (FAST QUERY CACHE - last 3 years only)
+                        # Then write to RDS (FAST QUERY CACHE - last 5 years only)
                         records_inserted = write_to_rds_with_retention(
                             rds_client, 
                             ohlcv_data, 
-                            retention_years=3
+                            retention_years=5
                         )
                         logger.info(f"  ✅ Inserted {records_inserted} records to RDS")
                         
@@ -422,7 +422,7 @@ def write_to_s3_bronze(ohlcv_data: List[OHLCVData], fetch_date: date) -> int:
 def write_to_rds_with_retention(
     rds_client: RDSPostgresClient, 
     ohlcv_data: List[OHLCVData],
-    retention_years: int = 3
+    retention_years: int = 5
 ) -> int:
     """
     Write OHLCV data to RDS with retention policy (FAST QUERY CACHE)
@@ -434,7 +434,7 @@ def write_to_rds_with_retention(
     Args:
         rds_client: RDS client instance
         ohlcv_data: List of OHLCV data objects
-        retention_years: Number of years to keep in RDS (default: 3)
+        retention_years: Number of years to keep in RDS (default: 5)
     
     Returns:
         Number of records inserted

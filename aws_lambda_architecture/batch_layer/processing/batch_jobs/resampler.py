@@ -95,18 +95,18 @@ class DuckDBS3Resampler:
             logger.error(f"Error configuring DuckDB for S3: {str(e)}")
             raise
     
-    def create_s3_view(self, s3_bucket: str, s3_prefix: str = "public/raw_ohlcv"):
+    def create_s3_view(self, s3_bucket: str, s3_prefix: str = "bronze/raw_ohlcv"):
         """Create a DuckDB view that reads from S3 parquet files
         
-        NOTE: AWS DMS migration adds 'timestamp' column for tracking.
-        The actual data timestamp is in 'timestamp_1' column!
+        NEW STRUCTURE: Symbol-partitioned bronze layer from RDS export
+        Path format: bronze/raw_ohlcv/symbol=*/data.parquet
         """
         try:
-            s3_path = f"s3://{s3_bucket}/{s3_prefix}/*.parquet"
+            # New structure: symbol-partitioned
+            s3_path = f"s3://{s3_bucket}/{s3_prefix}/symbol=*/data.parquet"
             logger.info(f"Creating DuckDB view for S3 path: {s3_path}")
             
-            # Create view with column mapping
-            # AWS DMS creates 'timestamp' for migration tracking, data is in 'timestamp_1'
+            # Create view - direct column mapping (no DMS quirks)
             create_view_sql = f"""
             CREATE OR REPLACE VIEW s3_ohlcv AS 
             SELECT 
@@ -116,13 +116,13 @@ class DuckDBS3Resampler:
                 low,
                 close,
                 volume,
-                timestamp_1 as timestamp,  -- AWS DMS: actual data timestamp
+                timestamp,  -- Direct from RDS export
                 interval
             FROM read_parquet('{s3_path}')
             """
             
             self.duckdb_conn.execute(create_view_sql)
-            logger.info(f"DuckDB view 's3_ohlcv' created successfully (using timestamp_1 as timestamp)")
+            logger.info(f"DuckDB view 's3_ohlcv' created successfully from symbol-partitioned bronze layer")
             
         except Exception as e:
             logger.error(f"Error creating S3 view: {str(e)}")

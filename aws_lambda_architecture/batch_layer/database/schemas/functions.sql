@@ -71,6 +71,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+--Create Growth Calculation Function
+CREATE OR REPLACE FUNCTION Growth(
+	p_symbol,
+	p_days
+)
+
 
 -- Test Function
 
@@ -78,3 +84,5 @@ $$ LANGUAGE plpgsql;
 SELECT * FROM Fetch_Symbol_Range('AAPL', 30)
 -- Test Fetch Symbol Period
 SELECT * FROM Fetch_Symbol_Period('AAPL', 'YTD')
+
+
