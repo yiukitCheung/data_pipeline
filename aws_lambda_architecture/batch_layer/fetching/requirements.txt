@@ -14,5 +14,8 @@ pydantic>=2.0.0,<3.0.0
 # PostgreSQL client (lightweight version) 
 psycopg2-binary>=2.9.0
 
+# Parquet support (for S3 bronze layer writes) - lightweight, no pandas!
+pyarrow>=14.0.0
+
 # Async HTTP client for parallel fetching
 aiohttp>=3.9.0

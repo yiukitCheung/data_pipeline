@@ -57,16 +57,14 @@ build_and_deploy_lambda() {
     # Copy only required clients (not redis, kinesis, aurora)
     cp "$SHARED_DIR/clients/polygon_client.py" "$package_dir/shared/clients/"
     cp "$SHARED_DIR/clients/rds_timescale_client.py" "$package_dir/shared/clients/"
-    cp "$SHARED_DIR/clients/fmp_client.py" "$package_dir/shared/clients/"
     
     # Create minimal __init__.py for Lambda (only what we need)
     cat > "$package_dir/shared/clients/__init__.py" << 'EOF'
 """Client modules for Lambda functions"""
 from .polygon_client import PolygonClient
 from .rds_timescale_client import RDSPostgresClient
-from .fmp_client import FMPClient
 
-__all__ = ['PolygonClient', 'RDSPostgresClient', 'FMPClient']
+__all__ = ['PolygonClient', 'RDSPostgresClient']
 EOF
     
     # Copy models and utils
@@ -90,6 +88,7 @@ EOF
     
     # Check package size
     local size=$(du -h "$SCRIPT_DIR/$function_name.zip" | cut -f1)
+    local size_bytes=$(stat -f%z "$SCRIPT_DIR/$function_name.zip" 2>/dev/null || stat -c%s "$SCRIPT_DIR/$function_name.zip")
     echo "✅ Created $function_name.zip ($size)"
     
     # Deploy to AWS
@@ -98,31 +97,79 @@ EOF
     # Try with prefix first, then without
     local aws_function_name="${FUNCTION_PREFIX}${function_name}"
     
-    if aws lambda get-function --function-name "$aws_function_name" --region "$AWS_REGION" &>/dev/null; then
-        echo "📝 Updating function: $aws_function_name"
-        result=$(aws lambda update-function-code \
-            --function-name "$aws_function_name" \
-            --zip-file "fileb://$SCRIPT_DIR/$function_name.zip" \
-            --region "$AWS_REGION" \
-            --output json)
+    # For packages > 50MB, upload to S3 first
+    if [ "$size_bytes" -gt 52428800 ]; then
+        echo "📦 Package is large ($size), uploading to S3 first..."
+        local s3_bucket="${LAMBDA_DEPLOY_BUCKET:-dev-condvest-lambda-deploy}"
+        local s3_key="lambda-packages/$function_name-$(date +%s).zip"
         
-        echo "✅ Updated successfully!"
-        echo "   Last Modified: $(echo $result | jq -r '.LastModified')"
-        echo "   Code Size: $(echo $result | jq -r '.CodeSize') bytes"
-    elif aws lambda get-function --function-name "$function_name" --region "$AWS_REGION" &>/dev/null; then
-        echo "📝 Updating function: $function_name"
-        result=$(aws lambda update-function-code \
-            --function-name "$function_name" \
-            --zip-file "fileb://$SCRIPT_DIR/$function_name.zip" \
-            --region "$AWS_REGION" \
-            --output json)
+        # Create S3 bucket if it doesn't exist
+        if ! aws s3 ls "s3://$s3_bucket" --region "$AWS_REGION" 2>/dev/null; then
+            echo "📦 Creating S3 bucket: $s3_bucket"
+            aws s3 mb "s3://$s3_bucket" --region "$AWS_REGION" 2>/dev/null || true
+        fi
         
-        echo "✅ Updated successfully!"
-        echo "   Last Modified: $(echo $result | jq -r '.LastModified')"
-        echo "   Code Size: $(echo $result | jq -r '.CodeSize') bytes"
+        # Upload to S3
+        echo "⬆️  Uploading to S3: s3://$s3_bucket/$s3_key"
+        aws s3 cp "$SCRIPT_DIR/$function_name.zip" "s3://$s3_bucket/$s3_key" --region "$AWS_REGION"
+        
+        # Update Lambda from S3
+        if aws lambda get-function --function-name "$aws_function_name" --region "$AWS_REGION" &>/dev/null; then
+            echo "📝 Updating function from S3: $aws_function_name"
+            result=$(aws lambda update-function-code \
+                --function-name "$aws_function_name" \
+                --s3-bucket "$s3_bucket" \
+                --s3-key "$s3_key" \
+                --region "$AWS_REGION" \
+                --output json)
+            
+            echo "✅ Updated successfully from S3!"
+            echo "   Last Modified: $(echo $result | jq -r '.LastModified')"
+            echo "   Code Size: $(echo $result | jq -r '.CodeSize') bytes"
+        elif aws lambda get-function --function-name "$function_name" --region "$AWS_REGION" &>/dev/null; then
+            echo "📝 Updating function from S3: $function_name"
+            result=$(aws lambda update-function-code \
+                --function-name "$function_name" \
+                --s3-bucket "$s3_bucket" \
+                --s3-key "$s3_key" \
+                --region "$AWS_REGION" \
+                --output json)
+            
+            echo "✅ Updated successfully from S3!"
+            echo "   Last Modified: $(echo $result | jq -r '.LastModified')"
+            echo "   Code Size: $(echo $result | jq -r '.CodeSize') bytes"
+        else
+            echo "❌ Function not found in AWS (tried: $aws_function_name and $function_name)"
+            echo "💡 Create it first via AWS Console, then run this script again."
+        fi
     else
-        echo "❌ Function not found in AWS (tried: $aws_function_name and $function_name)"
-        echo "💡 Create it first via AWS Console, then run this script again."
+        # Small package, direct upload
+        if aws lambda get-function --function-name "$aws_function_name" --region "$AWS_REGION" &>/dev/null; then
+            echo "📝 Updating function: $aws_function_name"
+            result=$(aws lambda update-function-code \
+                --function-name "$aws_function_name" \
+                --zip-file "fileb://$SCRIPT_DIR/$function_name.zip" \
+                --region "$AWS_REGION" \
+                --output json)
+            
+            echo "✅ Updated successfully!"
+            echo "   Last Modified: $(echo $result | jq -r '.LastModified')"
+            echo "   Code Size: $(echo $result | jq -r '.CodeSize') bytes"
+        elif aws lambda get-function --function-name "$function_name" --region "$AWS_REGION" &>/dev/null; then
+            echo "📝 Updating function: $function_name"
+            result=$(aws lambda update-function-code \
+                --function-name "$function_name" \
+                --zip-file "fileb://$SCRIPT_DIR/$function_name.zip" \
+                --region "$AWS_REGION" \
+                --output json)
+            
+            echo "✅ Updated successfully!"
+            echo "   Last Modified: $(echo $result | jq -r '.LastModified')"
+            echo "   Code Size: $(echo $result | jq -r '.CodeSize') bytes"
+        else
+            echo "❌ Function not found in AWS (tried: $aws_function_name and $function_name)"
+            echo "💡 Create it first via AWS Console, then run this script again."
+        fi
     fi
 }
 

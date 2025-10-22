@@ -17,7 +17,6 @@ from datetime import datetime, timedelta, date
 from typing import Dict, Any, List
 import os
 from decimal import Decimal
-import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from io import BytesIO
@@ -364,29 +363,33 @@ def write_to_s3_bronze(ohlcv_data: List[OHLCVData], fetch_date: date) -> int:
         s3_client = boto3.client('s3')
         
         # Convert OHLCV data to DataFrame
-        records = []
+        # Group data by symbol for partitioning (pure Python, no pandas!)
+        symbol_groups = {}
         for ohlcv in ohlcv_data:
-            records.append({
-                'symbol': ohlcv.symbol,
-                'open': float(ohlcv.open),
-                'high': float(ohlcv.high),
-                'low': float(ohlcv.low),
-                'close': float(ohlcv.close),
-                'volume': int(ohlcv.volume),
-                'timestamp': ohlcv.timestamp,
-                'interval': ohlcv.interval
-            })
+            if ohlcv.symbol not in symbol_groups:
+                symbol_groups[ohlcv.symbol] = []
+            symbol_groups[ohlcv.symbol].append(ohlcv)
         
-        df = pd.DataFrame(records)
-        
-        # Group by symbol for partitioning
+        # Write each symbol's data to S3 as parquet
         records_written = 0
-        for symbol, symbol_df in df.groupby('symbol'):
+        for symbol, symbol_data in symbol_groups.items():
             # S3 key: bronze/raw_ohlcv/symbol=AAPL/date=2025-10-18.parquet
             s3_key = f"{S3_BRONZE_PREFIX}/symbol={symbol}/date={fetch_date.isoformat()}.parquet"
             
-            # Convert to parquet in memory
-            table = pa.Table.from_pandas(symbol_df)
+            # Convert to PyArrow Table directly (no pandas!)
+            # Create arrays for each column
+            table = pa.table({
+                'symbol': [ohlcv.symbol for ohlcv in symbol_data],
+                'open': [float(ohlcv.open) for ohlcv in symbol_data],
+                'high': [float(ohlcv.high) for ohlcv in symbol_data],
+                'low': [float(ohlcv.low) for ohlcv in symbol_data],
+                'close': [float(ohlcv.close) for ohlcv in symbol_data],
+                'volume': [int(ohlcv.volume) for ohlcv in symbol_data],
+                'timestamp': [ohlcv.timestamp for ohlcv in symbol_data],
+                'interval': [ohlcv.interval for ohlcv in symbol_data]
+            })
+            
+            # Write to parquet in memory
             parquet_buffer = BytesIO()
             pq.write_table(table, parquet_buffer, compression='snappy')
             parquet_buffer.seek(0)
@@ -406,8 +409,8 @@ def write_to_s3_bronze(ohlcv_data: List[OHLCVData], fetch_date: date) -> int:
                 ContentType='application/x-parquet'
             )
             
-            records_written += len(symbol_df)
-            logger.debug(f"  📦 Wrote {len(symbol_df)} records for {symbol} to S3")
+            records_written += len(symbol_data)
+            logger.debug(f"  📦 Wrote {len(symbol_data)} records for {symbol} to S3")
         
         logger.info(f"✅ Successfully wrote {records_written} records to S3 bronze layer")
         logger.info(f"   Location: s3://{S3_BUCKET}/{S3_BRONZE_PREFIX}/")
