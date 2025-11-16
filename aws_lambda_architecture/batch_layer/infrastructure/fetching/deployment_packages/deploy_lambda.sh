@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_FETCHING_DIR="$(dirname "$SCRIPT_DIR")"
 BATCH_LAYER_DIR="$(dirname "$(dirname "$INFRA_FETCHING_DIR")")"
 FETCHING_DIR="$BATCH_LAYER_DIR/fetching"
-SHARED_DIR="$(dirname "$BATCH_LAYER_DIR")/shared"
+SHARED_DIR="$BATCH_LAYER_DIR/shared"  # Use batch_layer's shared directory
 
 # AWS Configuration
 AWS_REGION="${AWS_REGION:-ca-west-1}"

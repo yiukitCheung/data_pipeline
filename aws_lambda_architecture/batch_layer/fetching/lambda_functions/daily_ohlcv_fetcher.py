@@ -43,9 +43,15 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     - symbols: List of symbols to fetch (optional, defaults to all active)
     - date: Date to fetch data for (optional, defaults to previous trading day)
     - force: Boolean to force execution even on non-trading days
+    - skip_market_check: Boolean to skip market status check (useful for testing)
+    - backfill_missing: Boolean to auto-detect and fetch missing dates
+    - max_backfill_days: Max number of days to backfill (default: 30)
     """
     
     try:
+        # Parse event parameters (early)
+        skip_market_check = event.get('skip_market_check', False)
+        
         # Get Polygon API key from Secrets Manager
         secrets_client = boto3.client('secretsmanager')
         polygon_secret = secrets_client.get_secret_value(
@@ -58,15 +64,20 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         rds_client = RDSPostgresClient(
             secret_arn=os.environ['RDS_SECRET_ARN']
         ) 
-        # Market Status
-        market_status = polygon_client.get_market_status()
-        if market_status['market'] == 'closed':
-            logger.info(f"Skipping execution - market is closed")
-            return {
-                'statusCode': 200,
-                'body': json.dumps({'message': 'Skipping execution - market is closed'})
-            }
-        # Parse event parameters
+        
+        # Market Status Check (can be skipped for testing)
+        if not skip_market_check:
+            market_status = polygon_client.get_market_status()
+            if market_status['market'] == 'closed':
+                logger.info(f"Skipping execution - market is closed")
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({'message': 'Skipping execution - market is closed'})
+                }
+        else:
+            logger.info("⚠️  TESTING MODE: Skipping market status check")
+        
+        # Parse remaining event parameters
         symbols = event.get('symbols', None)  # None means fetch all active symbols
         target_date = event.get('date', None)
         force_execution = event.get('force', False)
@@ -151,6 +162,9 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                         )
                         logger.info(f"  ✅ Inserted {records_inserted} records to RDS")
                         
+                        # Update watermark table (INDUSTRY STANDARD PATTERN)
+                        update_watermark(rds_client, batch_symbols, fetch_date)
+                        
                         date_records += records_inserted
                         total_records += records_inserted
                     else:
@@ -210,59 +224,51 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
 
 def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) -> List[date]:
     """
-    Find missing trading dates by checking S3 bronze layer (SOURCE OF TRUTH)
+    Find missing trading dates by checking watermark table (FAST & SCALABLE)
     
-    NEW APPROACH: Check S3 for existing dates instead of RDS
+    INDUSTRY STANDARD APPROACH: Use metadata table (SCD Type 2) to track ingestion progress
+    - Single SQL query vs scanning 480,000+ S3 files
+    - Accurate per-symbol tracking with full history
+    - Scalable to millions of symbols
     
     Args:
-        rds_client: RDS client instance (not used, kept for backward compatibility)
+        rds_client: RDS client instance
         max_days_back: Maximum number of days to look back (default: 30)
     
     Returns:
         List of missing dates, sorted from oldest to newest
     """
     try:
-        s3_client = boto3.client('s3')
+        logger.info(f"🔍 Checking watermark table for missing dates...")
         
-        # Get all existing dates from S3 bronze layer
-        # List all files under bronze/raw_ohlcv/symbol=*/date=*.parquet
-        logger.info(f"🔍 Checking S3 bronze layer for existing dates...")
+        # Query watermark table for latest ingested date (only current records)
+        # If no data exists, start from max_days_back ago
+        query = """
+            SELECT 
+                MAX(latest_date) as max_date, 
+                MIN(latest_date) as min_date, 
+                COUNT(DISTINCT symbol) as symbol_count
+            FROM data_ingestion_watermark
+            WHERE is_current = TRUE;
+        """
         
-        existing_dates = set()
-        paginator = s3_client.get_paginator('list_objects_v2')
-        pages = paginator.paginate(
-            Bucket=S3_BUCKET,
-            Prefix=f"{S3_BRONZE_PREFIX}/symbol="
-        )
+        result = rds_client.execute_query(query)
         
-        for page in pages:
-            if 'Contents' not in page:
-                continue
-            
-            for obj in page['Contents']:
-                # Extract date from key: bronze/raw_ohlcv/symbol=AAPL/date=2025-10-18.parquet
-                key = obj['Key']
-                if '/date=' in key and key.endswith('.parquet'):
-                    try:
-                        date_str = key.split('/date=')[1].replace('.parquet', '')
-                        existing_dates.add(datetime.fromisoformat(date_str).date())
-                    except:
-                        continue  # Skip malformed keys
-        
-        if not existing_dates:
-            # No data in S3 - start from 30 days ago
-            logger.info("⚠️  No data found in S3 bronze layer, starting fresh backfill")
+        if not result or result[0]['max_date'] is None:
+            # No data in watermark table - start fresh backfill
+            logger.info(f"⚠️  No watermark data found, starting fresh backfill from {max_days_back} days ago")
             from_date = date.today() - timedelta(days=max_days_back)
         else:
-            latest_date = max(existing_dates)
-            logger.info(f"✅ Found data in S3, latest date: {latest_date}")
-            from_date = latest_date + timedelta(days=1)  # Start from day after latest
+            max_date = result[0]['max_date']
+            symbol_count = result[0]['symbol_count']
+            logger.info(f"✅ Found watermark: {symbol_count} symbols, latest date: {max_date}")
+            from_date = max_date + timedelta(days=1)  # Start from day after latest
         
         # Get all trading days from from_date to yesterday
         yesterday = date.today() - timedelta(days=1)
         
         if from_date > yesterday:
-            logger.info(f"✅ S3 bronze layer is up to date (latest: {from_date - timedelta(days=1)})")
+            logger.info(f"✅ Data is up to date (latest: {from_date - timedelta(days=1)})")
             return []
         
         # Find missing dates (only trading days - weekdays)
@@ -270,7 +276,7 @@ def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) ->
         current_date = from_date
         while current_date <= yesterday:
             # Skip weekends (Saturday=5, Sunday=6)
-            if current_date.weekday() < 5 and current_date not in existing_dates:
+            if current_date.weekday() < 5:
                 missing_dates.append(current_date)
             current_date += timedelta(days=1)
         
@@ -284,7 +290,7 @@ def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) ->
         return missing_dates
         
     except Exception as e:
-        logger.error(f"❌ Error detecting missing dates from S3: {str(e)}")
+        logger.error(f"❌ Error querying watermark table: {str(e)}")
         logger.warning("⚠️  Falling back to fetch yesterday only")
         # Fallback: just return yesterday
         return [date.today() - timedelta(days=1)]
@@ -477,3 +483,61 @@ def write_to_rds_with_retention(
         # But log it prominently for monitoring
         logger.error("⚠️  RDS write failed, but S3 write succeeded (data not lost)")
         return 0
+
+
+def update_watermark(rds_client: RDSPostgresClient, symbols: List[str], fetch_date: date):
+    """
+    Update watermark table after successful ingestion (SCD TYPE 2 PATTERN)
+    
+    SCD Type 2 Implementation:
+    1. Mark old record as is_current = FALSE (keep history)
+    2. Insert new record with is_current = TRUE (new current)
+    
+    This provides full audit trail while keeping fast lookups
+    
+    Args:
+        rds_client: RDS client instance
+        symbols: List of symbols that were successfully ingested
+        fetch_date: Date that was ingested
+    """
+    try:
+        # Access connection directly from client
+        conn = rds_client.connection
+        cursor = conn.cursor()
+        
+        # Temporarily disable autocommit for transaction
+        old_autocommit = conn.autocommit
+        conn.autocommit = False
+        
+        try:
+            for symbol in symbols:
+                # Step 1: Mark old record as not current (SCD Type 2)
+                update_query = """
+                    UPDATE data_ingestion_watermark
+                    SET is_current = FALSE
+                    WHERE symbol = %s AND is_current = TRUE;
+                """
+                cursor.execute(update_query, (symbol,))
+                
+                # Step 2: Insert new current record
+                insert_query = """
+                    INSERT INTO data_ingestion_watermark 
+                        (symbol, latest_date, ingested_at, records_count, is_current)
+                    VALUES (%s, %s, NOW(), 1, TRUE);
+                """
+                cursor.execute(insert_query, (symbol, fetch_date))
+            
+            conn.commit()
+            logger.info(f"✅ Updated watermark for {len(symbols)} symbols (date: {fetch_date}, SCD Type 2)")
+            
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.autocommit = old_autocommit
+        
+    except Exception as e:
+        logger.error(f"❌ Error updating watermark: {str(e)}")
+        # Don't fail Lambda for watermark update failures
+        # Worst case: we re-process some data next run (idempotent)
