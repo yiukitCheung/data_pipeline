@@ -162,8 +162,13 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
                         )
                         logger.info(f"  ✅ Inserted {records_inserted} records to RDS")
                         
-                        # Update watermark table (INDUSTRY STANDARD PATTERN)
-                        update_watermark(rds_client, batch_symbols, fetch_date)
+                        # Extract symbols that actually returned data
+                        symbols_with_data = list(set([ohlcv.symbol for ohlcv in ohlcv_data]))
+                        logger.info(f"  📊 Data returned for {len(symbols_with_data)}/{len(batch_symbols)} symbols")
+                        
+                        # Update watermark ONLY for symbols that had data (CRITICAL FIX)
+                        if symbols_with_data:
+                            update_watermark(rds_client, symbols_with_data, fetch_date)
                         
                         date_records += records_inserted
                         total_records += records_inserted
