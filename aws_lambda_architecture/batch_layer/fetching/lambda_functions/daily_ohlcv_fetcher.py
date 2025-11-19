@@ -20,6 +20,7 @@ from decimal import Decimal
 import pyarrow as pa
 import pyarrow.parquet as pq
 from io import BytesIO
+import pytz
 
 # Import shared utilities (included in deployment package)
 from shared.clients.polygon_client import PolygonClient
@@ -299,17 +300,34 @@ def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) ->
             logger.info(f"✅ Found watermark: {symbol_count} symbols, latest date: {max_date}")
             from_date = max_date + timedelta(days=1)  # Start from day after latest
         
-        # Get all trading days from from_date to yesterday
-        yesterday = date.today() - timedelta(days=1)
+        # Determine latest available date based on market close time
+        # Market closes at 4:00 PM ET, data becomes available shortly after
+        eastern = pytz.timezone('US/Eastern')
+        now_et = datetime.now(eastern)
+        market_close_today = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
         
-        if from_date > yesterday:
+        # If after 4 PM ET on a weekday, today's data is available
+        # Otherwise, fetch up to yesterday
+        if now_et >= market_close_today and now_et.weekday() < 5:
+            # Market closed today (weekday), today's data is available
+            latest_available_date = date.today()
+            logger.info(f"📊 Market closed today at 4 PM ET, fetching up to: {latest_available_date}")
+        else:
+            # Market hasn't closed yet, or it's weekend
+            latest_available_date = date.today() - timedelta(days=1)
+            if now_et.weekday() >= 5:
+                logger.info(f"📅 Weekend - fetching up to: {latest_available_date}")
+            else:
+                logger.info(f"⏰ Before market close (4 PM ET) - fetching up to: {latest_available_date}")
+        
+        if from_date > latest_available_date:
             logger.info(f"✅ Data is up to date (latest: {from_date - timedelta(days=1)})")
             return []
         
         # Find missing dates (only trading days - weekdays)
         missing_dates = []
         current_date = from_date
-        while current_date <= yesterday:
+        while current_date <= latest_available_date:
             # Skip weekends (Saturday=5, Sunday=6)
             if current_date.weekday() < 5:
                 missing_dates.append(current_date)
@@ -326,9 +344,20 @@ def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) ->
         
     except Exception as e:
         logger.error(f"❌ Error querying watermark table: {str(e)}")
-        logger.warning("⚠️  Falling back to fetch yesterday only")
-        # Fallback: just return yesterday
-        return [date.today() - timedelta(days=1)]
+        logger.warning("⚠️  Falling back to latest available date based on market time")
+        
+        # Fallback: Use same market timing logic
+        eastern = pytz.timezone('US/Eastern')
+        now_et = datetime.now(eastern)
+        market_close_today = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+        
+        if now_et >= market_close_today and now_et.weekday() < 5:
+            fallback_date = date.today()
+        else:
+            fallback_date = date.today() - timedelta(days=1)
+        
+        logger.info(f"📅 Fallback date: {fallback_date}")
+        return [fallback_date] if fallback_date.weekday() < 5 else []
 
 
 # Fix line 98-104: Replace the fetch_ohlcv_batch function with proven logic
