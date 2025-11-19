@@ -84,27 +84,47 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         backfill_missing = event.get('backfill_missing', True)  # Default: auto-detect missing dates
         max_backfill_days = int(event.get('max_backfill_days', 30))  # Limit backfill to last 30 days
         
+        # 📊 LOG EXECUTION MODE (IMPORTANT FOR PRODUCTION VISIBILITY)
+        execution_mode = "UNKNOWN"
+        if target_date:
+            execution_mode = "SPECIFIC_DATE"
+        elif backfill_missing and max_backfill_days > 30:
+            execution_mode = "LARGE_BACKFILL"  # Manual historical backfill
+        elif backfill_missing:
+            execution_mode = "PRODUCTION"  # Daily incremental with auto-recovery
+        else:
+            execution_mode = "SINGLE_DAY"
+        
+        logger.info(f"🚀 EXECUTION MODE: {execution_mode}")
+        logger.info(f"📋 Event Parameters: backfill_missing={backfill_missing}, max_backfill_days={max_backfill_days}, skip_market_check={skip_market_check}")
+        
         # Determine target date(s) to fetch
         dates_to_fetch = []
         if target_date:
             # Specific date requested
             target_date = datetime.fromisoformat(target_date).date()
             dates_to_fetch = [target_date]
+            logger.info(f"📅 Specific date mode: {target_date}")
         elif backfill_missing:
             # Smart mode: find missing dates in database
-            logger.info("🔍 Smart backfill mode: checking for missing dates...")
+            logger.info(f"🔍 Smart backfill mode: checking for missing dates (last {max_backfill_days} days)...")
             dates_to_fetch = get_missing_dates(rds_client, max_backfill_days)
             if not dates_to_fetch:
                 logger.info("✅ No missing dates found - database is up to date!")
+                logger.info(f"🎯 Mode: {execution_mode} - No action needed")
                 return {
                     'statusCode': 200,
-                    'body': json.dumps({'message': 'No missing dates - database is up to date'})
+                    'body': json.dumps({
+                        'message': 'No missing dates - database is up to date',
+                        'execution_mode': execution_mode
+                    })
                 }
-            logger.info(f"📅 Found {len(dates_to_fetch)} missing dates to backfill: {[d.isoformat() for d in dates_to_fetch]}")
+            logger.info(f"📅 Found {len(dates_to_fetch)} missing dates to backfill: {dates_to_fetch[0]} to {dates_to_fetch[-1]}")
         else:
             # Default: just fetch previous trading day
             target_date = polygon_client.get_previous_trading_day()
             dates_to_fetch = [target_date]
+            logger.info(f"📅 Single day mode: {target_date}")
         
         # Create batch job record
         job_id = f"daily-ohlcv-backfill-{int(datetime.utcnow().timestamp())}"
@@ -194,18 +214,28 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         if latest_date:
             trigger_fibonacci_resampling_job(latest_date)
         
-        logger.info(f"Completed OHLCV backfill. Total records: {total_records} across {len(dates_to_fetch)} dates")
+        execution_time = (batch_job.end_time - batch_job.start_time).total_seconds()
+        
+        # Final summary with execution mode
+        logger.info(f"✅ ========== JOB COMPLETE ==========")
+        logger.info(f"🎯 Execution Mode: {execution_mode}")
+        logger.info(f"📅 Dates Processed: {dates_to_fetch[0]} to {dates_to_fetch[-1]} ({len(dates_to_fetch)} dates)")
+        logger.info(f"📊 Symbols: {len(symbols)} active symbols")
+        logger.info(f"💾 Records Inserted: {total_records:,}")
+        logger.info(f"⏱️  Execution Time: {execution_time:.1f}s")
+        logger.info(f"🏁 Job ID: {job_id}")
         
         return {
             'statusCode': 200,
             'body': json.dumps({
-                'message': 'OHLCV backfill completed successfully',
+                'message': f'OHLCV {execution_mode} completed successfully',
+                'execution_mode': execution_mode,
                 'job_id': job_id,
                 'dates_processed': [d.isoformat() for d in dates_to_fetch],
                 'num_dates': len(dates_to_fetch),
                 'symbols_processed': len(symbols),
                 'records_inserted': total_records,
-                'execution_time_seconds': (batch_job.end_time - batch_job.start_time).total_seconds()
+                'execution_time_seconds': execution_time
             })
         }
         
