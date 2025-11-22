@@ -473,7 +473,7 @@ class DuckDBS3Resampler:
         logger.info(f"Output: s3://{self.s3_bucket}/{output_prefix}/")
         
         # Create S3 view in DuckDB for reading bronze (raw) data
-        raw_data_prefix = "public/raw_ohlcv"
+        raw_data_prefix = "bronze/raw_ohlcv"
         logger.info(f"📥 Reading raw data from: s3://{s3_input_bucket}/{raw_data_prefix}/")
         self.create_s3_view(s3_input_bucket, raw_data_prefix)
         
