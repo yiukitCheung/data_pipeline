@@ -98,12 +98,12 @@ class DuckDBS3Resampler:
     def create_s3_view(self, s3_bucket: str, s3_prefix: str = "bronze/raw_ohlcv"):
         """Create a DuckDB view that reads from S3 parquet files
         
-        NEW STRUCTURE: Symbol-partitioned bronze layer from RDS export
-        Path format: bronze/raw_ohlcv/symbol=*/data.parquet
+        NEW STRUCTURE: Symbol + date partitioned bronze layer from Lambda fetcher
+        Path format: bronze/raw_ohlcv/symbol=AAPL/date=2025-10-18.parquet
         """
         try:
-            # New structure: symbol-partitioned
-            s3_path = f"s3://{s3_bucket}/{s3_prefix}/symbol=*/data.parquet"
+            # New structure: symbol + date partitioned (matches fetcher output)
+            s3_path = f"s3://{s3_bucket}/{s3_prefix}/symbol=*/date=*.parquet"
             logger.info(f"Creating DuckDB view for S3 path: {s3_path}")
             
             # Create view - direct column mapping (no DMS quirks)

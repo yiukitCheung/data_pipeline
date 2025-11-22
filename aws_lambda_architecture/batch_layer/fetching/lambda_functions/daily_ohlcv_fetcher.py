@@ -290,10 +290,16 @@ def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) ->
         
         result = rds_client.execute_query(query)
         
+        # Get current Eastern time FIRST for timezone-consistent date calculations
+        # Lambda runs in UTC, so we must use ET time for all date operations
+        eastern = pytz.timezone('US/Eastern')
+        now_et = datetime.now(eastern)
+        today_et = now_et.date()  # Current date in Eastern timezone
+        
         if not result or result[0]['max_date'] is None:
             # No data in watermark table - start fresh backfill
             logger.info(f"⚠️  No watermark data found, starting fresh backfill from {max_days_back} days ago")
-            from_date = date.today() - timedelta(days=max_days_back)
+            from_date = today_et - timedelta(days=max_days_back)
         else:
             max_date = result[0]['max_date']
             symbol_count = result[0]['symbol_count']
@@ -302,19 +308,17 @@ def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) ->
         
         # Determine latest available date based on market close time
         # Market closes at 4:00 PM ET, data becomes available shortly after
-        eastern = pytz.timezone('US/Eastern')
-        now_et = datetime.now(eastern)
         market_close_today = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
         
         # If after 4 PM ET on a weekday, today's data is available
         # Otherwise, fetch up to yesterday
         if now_et >= market_close_today and now_et.weekday() < 5:
             # Market closed today (weekday), today's data is available
-            latest_available_date = date.today()
+            latest_available_date = today_et
             logger.info(f"📊 Market closed today at 4 PM ET, fetching up to: {latest_available_date}")
         else:
             # Market hasn't closed yet, or it's weekend
-            latest_available_date = date.today() - timedelta(days=1)
+            latest_available_date = today_et - timedelta(days=1)
             if now_et.weekday() >= 5:
                 logger.info(f"📅 Weekend - fetching up to: {latest_available_date}")
             else:
@@ -349,12 +353,13 @@ def get_missing_dates(rds_client: RDSPostgresClient, max_days_back: int = 30) ->
         # Fallback: Use same market timing logic
         eastern = pytz.timezone('US/Eastern')
         now_et = datetime.now(eastern)
+        today_et = now_et.date()  # Current date in Eastern timezone
         market_close_today = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
         
         if now_et >= market_close_today and now_et.weekday() < 5:
-            fallback_date = date.today()
+            fallback_date = today_et
         else:
-            fallback_date = date.today() - timedelta(days=1)
+            fallback_date = today_et - timedelta(days=1)
         
         logger.info(f"📅 Fallback date: {fallback_date}")
         return [fallback_date] if fallback_date.weekday() < 5 else []
