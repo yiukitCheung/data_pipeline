@@ -98,15 +98,30 @@ class DuckDBS3Resampler:
     def create_s3_view(self, s3_bucket: str, s3_prefix: str = "bronze/raw_ohlcv"):
         """Create a DuckDB view that reads from S3 parquet files
         
-        NEW STRUCTURE: Symbol + date partitioned bronze layer from Lambda fetcher
-        Path format: bronze/raw_ohlcv/symbol=AAPL/date=2025-10-18.parquet
+        OPTIMIZED ARCHITECTURE: Reads from consolidated data.parquet files
+        - data.parquet: Maintained by separate consolidation job
+        - Contains ALL historical data (consolidated from date=*.parquet files)
+        - One file per symbol = fast query performance
+        
+        Data Flow:
+            1. Lambda Fetcher → writes date=*.parquet (daily incremental)
+            2. Consolidation Job → merges into data.parquet (periodic)
+            3. Resampler → reads data.parquet (fast analytics)
+        
+        This follows industry-standard data lake compaction patterns:
+            - Delta Lake OPTIMIZE
+            - Apache Iceberg compaction
+            - Apache Hudi compaction
         """
         try:
-            # New structure: symbol + date partitioned (matches fetcher output)
-            s3_path = f"s3://{s3_bucket}/{s3_prefix}/symbol=*/date=*.parquet"
-            logger.info(f"Creating DuckDB view for S3 path: {s3_path}")
+            # Read from consolidated files (one per symbol)
+            s3_path = f"s3://{s3_bucket}/{s3_prefix}/symbol=*/data.parquet"
             
-            # Create view - direct column mapping (no DMS quirks)
+            logger.info(f"Creating DuckDB view from consolidated bronze layer:")
+            logger.info(f"  📦 Path: {s3_path}")
+            logger.info(f"  ⚡ Optimized for fast analytics (one file per symbol)")
+            
+            # Create view - direct column mapping
             create_view_sql = f"""
             CREATE OR REPLACE VIEW s3_ohlcv AS 
             SELECT 
@@ -116,13 +131,13 @@ class DuckDBS3Resampler:
                 low,
                 close,
                 volume,
-                timestamp,  -- Direct from RDS export
+                timestamp,
                 interval
             FROM read_parquet('{s3_path}')
             """
             
             self.duckdb_conn.execute(create_view_sql)
-            logger.info(f"DuckDB view 's3_ohlcv' created successfully from symbol-partitioned bronze layer")
+            logger.info(f"✅ DuckDB view 's3_ohlcv' created successfully from consolidated bronze layer")
             
         except Exception as e:
             logger.error(f"Error creating S3 view: {str(e)}")
