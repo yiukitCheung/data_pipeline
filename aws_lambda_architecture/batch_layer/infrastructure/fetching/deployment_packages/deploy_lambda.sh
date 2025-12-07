@@ -178,7 +178,8 @@ echo "🧹 Cleaning previous builds..."
 rm -rf "$SCRIPT_DIR"/package/
 mkdir -p "$SCRIPT_DIR"/package
 
-# Build and deploy Lambda functions
+# Build and deploy Lambda functions (fetchers only)
+# Note: Consolidation moved to AWS Batch (see processing/batch_jobs/)
 build_and_deploy_lambda "daily-ohlcv-fetcher"
 build_and_deploy_lambda "daily-meta-fetcher"
 
@@ -190,16 +191,28 @@ echo "=" "=" "=" "=" "=" "=" "=" "=" "=" "="
 echo "🎉 Deployment complete!"
 echo "=" "=" "=" "=" "=" "=" "=" "=" "=" "="
 echo ""
-echo "📊 Deployed packages:"
+echo "📊 Deployed packages (now stored in S3):"
 for zip_file in "$SCRIPT_DIR"/*.zip; do
     if [ -f "$zip_file" ]; then
         size=$(du -h "$zip_file" | cut -f1)
-        echo "  $(basename "$zip_file"): $size"
+        echo "  $(basename "$zip_file"): $size → s3://$LAMBDA_DEPLOY_BUCKET/lambda-packages/"
     fi
 done
+
+# Clean up local zip files (they're now in S3)
+echo ""
+echo "🧹 Cleaning up local zip files (already uploaded to S3)..."
+rm -f "$SCRIPT_DIR"/*.zip
+echo "✅ Local zip files removed"
 
 echo ""
 echo "💡 Tips:"
 echo "  - View logs: aws logs tail /aws/lambda/daily_ohlcv_fetcher --follow"
 echo "  - Test function: aws lambda invoke --function-name daily_ohlcv_fetcher response.json"
+echo ""
+echo "📦 Lambda packages stored in S3: s3://${LAMBDA_DEPLOY_BUCKET:-dev-condvest-lambda-deploy}/lambda-packages/"
+echo ""
+echo "📝 Note: Consolidation is now handled by AWS Batch (not Lambda)"
+echo "   Build container: ./processing/container_images/build_container.sh"
+echo "   Run consolidator: Set JOB_TYPE=consolidator in AWS Batch job definition"
 

@@ -240,7 +240,7 @@ resource "aws_batch_job_queue" "resampler" {
   tags = local.common_tags
 }
 
-# Batch Job Definition
+# Batch Job Definition - Resampler
 resource "aws_batch_job_definition" "resampler" {
   name = local.name_prefix
   type = "container"
@@ -249,6 +249,8 @@ resource "aws_batch_job_definition" "resampler" {
     image = "${aws_ecr_repository.resampler.repository_url}:latest"
     vcpus = 2
     memory = 4096
+    
+    command = ["python", "resampler.py"]
     
     jobRoleArn = aws_iam_role.batch_job_role.arn
     executionRoleArn = aws_iam_role.batch_execution_role.arn
@@ -307,15 +309,166 @@ resource "aws_batch_job_definition" "resampler" {
   tags = local.common_tags
 }
 
+# Batch Job Definition - Bronze Layer Consolidator
+resource "aws_batch_job_definition" "consolidator" {
+  name = "${var.environment}-batch-bronze-consolidator"
+  type = "container"
+
+  container_properties = jsonencode({
+    image = "${aws_ecr_repository.resampler.repository_url}:latest"
+    vcpus = 2
+    memory = 4096
+    
+    command = ["python", "consolidator.py"]
+    
+    jobRoleArn = aws_iam_role.batch_job_role.arn
+    executionRoleArn = aws_iam_role.batch_execution_role.arn
+    
+    environment = [
+      {
+        name  = "AWS_REGION"
+        value = var.aws_region
+      },
+      {
+        name  = "S3_BUCKET"
+        value = "dev-condvest-datalake"
+      },
+      {
+        name  = "S3_PREFIX"
+        value = "bronze/raw_ohlcv"
+      },
+      {
+        name  = "MODE"
+        value = "incremental"
+      },
+      {
+        name  = "MAX_WORKERS"
+        value = "10"
+      },
+      {
+        name  = "RETENTION_DAYS"
+        value = "30"
+      },
+      {
+        name  = "SKIP_CLEANUP"
+        value = "false"
+      }
+    ]
+    
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.resampler.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "consolidator"
+      }
+    }
+    
+    resourceRequirements = [
+      {
+        type  = "VCPU"
+        value = "2"
+      },
+      {
+        type  = "MEMORY"
+        value = "4096"
+      }
+    ]
+  })
+
+  retry_strategy {
+    attempts = 2
+  }
+
+  timeout {
+    attempt_duration_seconds = 1800  # 30 minutes
+  }
+
+  tags = merge(local.common_tags, {
+    Component = "consolidator"
+  })
+}
+
+# EventBridge Rule for Daily Consolidation
+resource "aws_cloudwatch_event_rule" "consolidator_schedule" {
+  name                = "${var.environment}-consolidator-daily-schedule"
+  description         = "Daily Bronze Layer Consolidation - runs at 6 AM UTC"
+  schedule_expression = "cron(0 6 * * ? *)"
+  state               = "ENABLED"
+
+  tags = merge(local.common_tags, {
+    Component = "consolidator"
+  })
+}
+
+# IAM Role for EventBridge to submit Batch jobs
+resource "aws_iam_role" "eventbridge_batch_role" {
+  name = "${var.environment}-eventbridge-batch-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+# IAM Policy for EventBridge to submit Batch jobs
+resource "aws_iam_role_policy" "eventbridge_batch_policy" {
+  name = "${var.environment}-eventbridge-batch-policy"
+  role = aws_iam_role.eventbridge_batch_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "batch:SubmitJob"
+        Resource = [
+          aws_batch_job_definition.consolidator.arn,
+          aws_batch_job_definition.resampler.arn,
+          aws_batch_job_queue.resampler.arn
+        ]
+      }
+    ]
+  })
+}
+
+# EventBridge Target for Consolidator
+resource "aws_cloudwatch_event_target" "consolidator_batch_target" {
+  rule      = aws_cloudwatch_event_rule.consolidator_schedule.name
+  target_id = "ConsolidatorBatchJob"
+  arn       = aws_batch_job_queue.resampler.arn
+  role_arn  = aws_iam_role.eventbridge_batch_role.arn
+
+  batch_target {
+    job_definition = aws_batch_job_definition.consolidator.arn
+    job_name       = "scheduled-consolidator"
+  }
+}
+
 # Outputs
 output "ecr_repository_url" {
-  description = "ECR repository URL for the resampler image"
+  description = "ECR repository URL for the batch processor image"
   value       = aws_ecr_repository.resampler.repository_url
 }
 
-output "batch_job_definition_arn" {
-  description = "ARN of the Batch job definition"
+output "batch_job_definition_resampler_arn" {
+  description = "ARN of the Resampler Batch job definition"
   value       = aws_batch_job_definition.resampler.arn
+}
+
+output "batch_job_definition_consolidator_arn" {
+  description = "ARN of the Consolidator Batch job definition"
+  value       = aws_batch_job_definition.consolidator.arn
 }
 
 output "batch_job_queue_arn" {
@@ -326,4 +479,9 @@ output "batch_job_queue_arn" {
 output "cloudwatch_log_group" {
   description = "CloudWatch log group name"
   value       = aws_cloudwatch_log_group.resampler.name
+}
+
+output "consolidator_schedule_rule_arn" {
+  description = "ARN of the EventBridge schedule rule for consolidator"
+  value       = aws_cloudwatch_event_rule.consolidator_schedule.arn
 }

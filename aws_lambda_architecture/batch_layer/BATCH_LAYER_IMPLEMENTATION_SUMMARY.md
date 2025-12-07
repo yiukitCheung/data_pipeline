@@ -20,11 +20,12 @@
 ```
 s3://dev-condvest-datalake/bronze/raw_ohlcv/
 ├── symbol=AAPL/
-│   ├── date=2025-11-19.parquet
+│   ├── data.parquet          ← Consolidated (fast reads)
+│   ├── date=2025-11-19.parquet  ← Daily incremental
 │   ├── date=2025-11-20.parquet
 │   └── ...
 ├── symbol=MSFT/
-│   └── date=*.parquet
+│   └── ...
 └── ...
 ```
 
@@ -95,11 +96,19 @@ s3://dev-condvest-datalake/processing_metadata/
 
 ---
 
-### ✅ 3. Bronze Layer Consolidation Job (NEW!)
+### ✅ 3. Bronze Layer Consolidation Job (DEPLOYED!)
 
-**Status:** ✅ **IMPLEMENTED AND TESTED**
+**Status:** ✅ **DEPLOYED TO AWS BATCH + EVENTBRIDGE SCHEDULED**
 
-**File:** `processing/batch_jobs/consolidate.py`
+**File:** `processing/batch_jobs/consolidator.py`
+
+**AWS Resources:**
+| Resource | Name | Status |
+|----------|------|--------|
+| Job Definition | `dev-batch-bronze-consolidator` | ✅ Active (rev 1) |
+| EventBridge Rule | `dev-consolidator-daily-schedule` | ✅ Enabled |
+| Schedule | Daily at 6:00 AM UTC | ✅ Configured |
+| Docker Image | `dev-batch-processor:latest` | ✅ Built |
 
 **Purpose:** Merges daily `date=*.parquet` files into single `data.parquet` per symbol for fast reading.
 
@@ -114,10 +123,21 @@ Resampler reads:        symbol=*/data.parquet (fast!)
 ```
 
 **Key Features:**
+- **Parallel Processing:** 10 workers (5-8x faster than sequential)
 - **Incremental Processing:** Only consolidates symbols with new data
 - **Metadata-Driven:** Uses RDS watermark table + consolidation manifest
 - **Industry Standard:** Similar to Delta Lake, Iceberg, Hudi compaction
-- **Fast Access:** Uses explicit S3 paths (no wildcard scanning)
+- **Integrated Cleanup:** Removes old date files after consolidation
+
+**Performance (Local Test - 5,419 Symbols):**
+| Metric | Value |
+|--------|-------|
+| Total Time | 8.5 minutes |
+| Throughput | 10.6 symbols/sec |
+| Symbols Consolidated | 5,345 |
+| Files Cleaned | 1,210 |
+| Space Freed | 2.73 MB |
+| Errors | 0 |
 
 **Consolidation Manifest:**
 ```
@@ -125,30 +145,29 @@ s3://dev-condvest-datalake/processing_metadata/consolidation_manifest.parquet
 ```
 | symbol | last_consolidated_date | row_count | last_updated |
 |--------|------------------------|-----------|--------------|
-| AAPL   | 2025-11-28            | 12,500    | 2025-11-29   |
-| MSFT   | 2025-11-28            | 11,200    | 2025-11-29   |
+| AAPL   | 2025-12-06            | 11,315    | 2025-12-06   |
+| MSFT   | 2025-12-06            | 11,501    | 2025-12-06   |
 
-**Usage:**
+**Manual Trigger:**
 ```bash
-# Run consolidation job
-python consolidate.py
-
-# Run with specific symbols
-python consolidate.py --symbols AAPL,MSFT,GOOGL
-
-# Force full reconsolidation
-python consolidate.py --force-full
+aws batch submit-job \
+  --job-name manual-consolidator-$(date +%Y%m%d%H%M%S) \
+  --job-queue dev-batch-duckdb-resampler \
+  --job-definition dev-batch-bronze-consolidator \
+  --region ca-west-1
 ```
 
 ---
 
-### ✅ 4. Bronze Layer Vacuum/Cleanup Job (NEW!)
+### ✅ 4. Bronze Layer Vacuum/Cleanup Script (Local)
 
-**Status:** ✅ **IMPLEMENTED AND TESTED**
+**Status:** ✅ **IMPLEMENTED (Local Script)**
 
 **File:** `processing/batch_jobs/vaccume.py`
 
 **Purpose:** Removes old `date=*.parquet` files after consolidation to reduce S3 storage and improve read performance.
+
+**Note:** This script runs locally, not deployed to AWS. The consolidator job has integrated cleanup, so vacuum is only needed for manual maintenance.
 
 **Logic:**
 | Scenario | Action |
@@ -157,10 +176,10 @@ python consolidate.py --force-full
 | Symbol WITHOUT `data.parquet` | Don't touch (preserve all files) |
 | Recent files (< 30 days) | Keep as safety buffer |
 
-**Cleanup Manifest:**
-```
-s3://dev-condvest-datalake/processing_metadata/cleanup_manifest.json
-```
+**Key Features:**
+- **Parallel Processing:** 10 workers for fast cleanup
+- **Dry Run Mode:** Preview what would be deleted
+- **Cleanup Manifest:** Tracks cleanup operations
 
 **Usage:**
 ```bash
@@ -170,17 +189,12 @@ python vaccume.py --dry-run
 # Run cleanup on specific symbols
 python vaccume.py --symbols AAPL,MSFT,GOOGL
 
-# Run full cleanup
-python vaccume.py
+# Run full cleanup with parallel processing
+python vaccume.py --max-workers 10
 
 # Custom retention period
 python vaccume.py --retention-days 60
 ```
-
-**Test Results (Dry Run - 5 Symbols):**
-- Files to delete: 35,331
-- Files to keep: 110 (within 30 days)
-- Space freed: 165.67 MB
 
 ---
 
@@ -211,8 +225,9 @@ python vaccume.py --retention-days 60
 │                          │                                               │
 │                          ▼                                               │
 │              ┌───────────────────────┐                                   │
-│              │  Consolidation Job    │  Weekly/On-demand                │
-│              │    consolidate.py     │                                   │
+│              │  Consolidation Job    │  Daily 6:00 AM UTC (EventBridge) │
+│              │   consolidator.py     │  AWS Batch (Fargate)             │
+│              │   + Integrated Cleanup│                                   │
 │              └───────────┬───────────┘                                   │
 │                          │                                               │
 │                          ▼                                               │
@@ -225,8 +240,8 @@ python vaccume.py --retention-days 60
 │         │                │                │                              │
 │         ▼                ▼                ▼                              │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                      │
-│  │ Vacuum Job  │  │  Resampler  │  │  Analytics  │                      │
-│  │ vaccume.py  │  │ resampler.py│  │  (DuckDB)   │                      │
+│  │ Vacuum      │  │  Resampler  │  │  Analytics  │                      │
+│  │ (manual)    │  │ resampler.py│  │  (DuckDB)   │                      │
 │  └─────────────┘  └──────┬──────┘  └─────────────┘                      │
 │                          │                                               │
 │                          ▼                                               │
@@ -246,9 +261,9 @@ python vaccume.py --retention-days 60
 |-----|------|------|----------|---------|
 | **OHLCV Fetcher** | Lambda | `daily_ohlcv_fetcher.py` | Daily 4:05 PM ET | Fetch daily OHLCV data |
 | **Meta Fetcher** | Lambda | `daily_meta_fetcher.py` | Daily | Fetch symbol metadata |
-| **Consolidator** | Batch | `consolidate.py` | Weekly/On-demand | Merge date files to data.parquet |
-| **Vacuum** | Batch | `vaccume.py` | Monthly/On-demand | Clean old date files |
-| **Resampler** | Batch | `resampler.py` | After consolidation | Fibonacci resampling |
+| **Consolidator** | AWS Batch | `consolidator.py` | Daily 6:00 AM UTC | Merge date files + cleanup |
+| **Vacuum** | Local Script | `vaccume.py` | Manual/Monthly | Deep clean old date files |
+| **Resampler** | AWS Batch | `resampler.py` | After consolidation | Fibonacci resampling |
 
 ---
 
@@ -257,18 +272,17 @@ python vaccume.py --retention-days 60
 ### Daily (Automated via EventBridge)
 ```
 1. Lambda Fetcher (4:05 PM ET) → Writes date=*.parquet + RDS
+2. Consolidator Job (6:00 AM UTC next day) → Merges to data.parquet + cleanup
 ```
 
-### Weekly (Manual or EventBridge)
+### Weekly/On-Demand (Manual)
 ```
-1. Consolidation Job → Merges date=*.parquet → data.parquet
-2. Resampler → Reads data.parquet → Writes silver layer
-3. Vacuum Job (optional) → Cleans old date=*.parquet files
+1. Resampler → Reads data.parquet → Writes silver layer
 ```
 
 ### Monthly (Maintenance)
 ```
-1. Vacuum Job → Full cleanup of old date files
+1. Vacuum Script (local) → Deep cleanup of old date files
 2. RDS Retention Job → Archive old RDS data
 ```
 
@@ -277,25 +291,68 @@ python vaccume.py --retention-days 60
 ## 📊 Performance Metrics
 
 ### Lambda Fetcher
-- **Symbols:** 5,350
+- **Symbols:** 5,350+
 - **Daily Runtime:** ~5-10 minutes (async)
 - **Records Per Day:** ~5,350
 - **Cost:** ~$0.01/day
 
-### Consolidation Job
-- **First Run:** ~6 hours (all 5,350 symbols)
-- **Incremental:** ~1-5 minutes (only changed symbols)
-- **Cost:** ~$0.10/run
+### Consolidation Job (AWS Batch)
+- **Throughput:** 10.6 symbols/sec (parallel)
+- **Full Run:** ~8-10 minutes (5,400+ symbols)
+- **Incremental:** ~1-2 minutes (only new symbols)
+- **Cost:** ~$0.05/run
 
-### Vacuum Job (Dry Run - 5 Symbols)
-- **Files Deleted:** 35,331
-- **Space Freed:** 165.67 MB
-- **Runtime:** ~2 minutes
-
-### Resampler
+### Resampler (AWS Batch)
 - **Records:** 10,842,928
 - **Runtime:** ~1.9 hours (full), ~5 min (incremental)
 - **Cost:** ~$0.50/run
+
+---
+
+## 🔧 AWS Batch Job Definitions
+
+### Consolidator Job Definition
+```json
+{
+  "jobDefinitionName": "dev-batch-bronze-consolidator",
+  "type": "container",
+  "containerProperties": {
+    "image": "471112909340.dkr.ecr.ca-west-1.amazonaws.com/dev-batch-processor:latest",
+    "command": ["python", "consolidator.py"],
+    "resourceRequirements": [
+      {"type": "VCPU", "value": "2"},
+      {"type": "MEMORY", "value": "4096"}
+    ],
+    "environment": [
+      {"name": "S3_BUCKET", "value": "dev-condvest-datalake"},
+      {"name": "S3_PREFIX", "value": "bronze/raw_ohlcv"},
+      {"name": "MODE", "value": "incremental"},
+      {"name": "MAX_WORKERS", "value": "10"},
+      {"name": "RETENTION_DAYS", "value": "30"}
+    ]
+  }
+}
+```
+
+### Resampler Job Definition
+```json
+{
+  "jobDefinitionName": "dev-batch-duckdb-resampler",
+  "type": "container",
+  "containerProperties": {
+    "image": "471112909340.dkr.ecr.ca-west-1.amazonaws.com/dev-batch-processor:latest",
+    "command": ["python", "resampler.py"],
+    "resourceRequirements": [
+      {"type": "VCPU", "value": "2"},
+      {"type": "MEMORY", "value": "4096"}
+    ],
+    "environment": [
+      {"name": "S3_BUCKET_NAME", "value": "dev-condvest-datalake"},
+      {"name": "RESAMPLING_INTERVALS", "value": "3,5,8,13,21,34"}
+    ]
+  }
+}
+```
 
 ---
 
@@ -308,15 +365,14 @@ RDS_SECRET_ARN=arn:aws:secretsmanager:ca-west-1:xxx
 S3_DATALAKE_BUCKET=dev-condvest-datalake
 ```
 
-### Batch Jobs (Consolidate, Vacuum, Resampler)
+### Batch Jobs (Consolidator, Resampler)
 ```bash
 S3_BUCKET=dev-condvest-datalake
 S3_PREFIX=bronze/raw_ohlcv
 AWS_REGION=ca-west-1
-RDS_HOST=xxx.rds.amazonaws.com
-RDS_DATABASE=condvest
-RDS_USER=xxx
-RDS_PASSWORD=xxx
+MODE=incremental
+MAX_WORKERS=10
+RETENTION_DAYS=30
 ```
 
 ---
@@ -331,8 +387,8 @@ RDS_PASSWORD=xxx
 - [x] S3 Bronze structure established
 
 ### Phase 2: Data Optimization ✅
-- [x] Consolidation job implemented
-- [x] Vacuum/cleanup job implemented
+- [x] Consolidation job implemented (parallel processing)
+- [x] Vacuum/cleanup script implemented
 - [x] Metadata-driven incremental processing
 - [x] Explicit paths for fast S3 access
 
@@ -342,13 +398,49 @@ RDS_PASSWORD=xxx
 - [x] Silver layer validated
 - [x] All 6 Fibonacci intervals processed
 
-### Phase 4: Production (In Progress)
-- [ ] Consolidation job deployed to AWS Batch
-- [ ] Vacuum job deployed to AWS Batch
-- [ ] EventBridge schedules for batch jobs
-- [ ] CloudWatch alarms configured
+### Phase 4: Production ✅
+- [x] Consolidation job deployed to AWS Batch
+- [x] EventBridge schedule for consolidator (daily 6 AM UTC)
+- [x] Docker container with both resampler and consolidator
+- [x] CloudWatch logs configured
+
+### Phase 5: Monitoring (Recommended)
+- [ ] CloudWatch alarms for job failures
+- [ ] SNS notifications for errors
+- [ ] Dashboard for pipeline health
 
 ---
 
-**Last Updated:** December 3, 2025  
-**Status:** Batch Layer 95% Complete - Pending AWS Batch deployment for consolidation/vacuum jobs
+## 📂 File Structure
+
+```
+aws_lambda_architecture/batch_layer/
+├── fetching/
+│   ├── lambda_functions/
+│   │   ├── daily_ohlcv_fetcher.py  ← Lambda: fetch OHLCV
+│   │   └── daily_meta_fetcher.py   ← Lambda: fetch metadata
+│   └── requirements.txt
+│
+├── processing/
+│   ├── batch_jobs/
+│   │   ├── consolidator.py         ← Batch: consolidate bronze layer
+│   │   ├── resampler.py            ← Batch: Fibonacci resampling
+│   │   ├── vaccume.py              ← Local: cleanup old files
+│   │   └── requirements.txt
+│   └── container_images/
+│       ├── Dockerfile              ← Supports both jobs
+│       └── build_container.sh
+│
+├── infrastructure/
+│   ├── modules/processing/
+│   │   └── main.tf                 ← Terraform: job definitions
+│   └── processing/
+│       └── deploy_consolidator.sh  ← CLI deployment script
+│
+└── BATCH_LAYER_IMPLEMENTATION_SUMMARY.md
+```
+
+---
+
+**Last Updated:** December 6, 2025  
+**Status:** ✅ Batch Layer 100% Complete - All jobs deployed and scheduled

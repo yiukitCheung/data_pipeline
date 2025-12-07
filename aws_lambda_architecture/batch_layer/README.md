@@ -11,21 +11,22 @@ batch_layer/
 │   │   └── schema_init_postgres.sql
 │   └── migrations/              # Database migration scripts
 │
-├── fetching/                    # Lambda functions for data fetching
+├── fetching/                    # Lambda functions (serverless)
 │   ├── lambda_functions/        # Lambda function code
 │   │   ├── daily_ohlcv_fetcher.py   # Daily OHLCV data fetcher
-│   │   └── daily_meta_fetcher.py    # Symbol metadata fetcher
+│   │   ├── daily_meta_fetcher.py    # Symbol metadata fetcher
+│   │   └── consolidate_bronze.py    # 🆕 Bronze layer consolidation + cleanup
 │   └── deployment_packages/     # Deployment artifacts
 │       ├── build_layer.sh            # Build Lambda Layer
 │       ├── build_packages.sh         # Build Lambda ZIP packages
 │       ├── deploy_lambda.sh          # Deploy Lambda to AWS
 │       └── layer_requirements.txt    # Lambda Layer dependencies
 │
-├── processing/                  # AWS Batch processing jobs
+├── processing/                  # AWS Batch processing jobs (heavy workloads)
 │   └── batch_jobs/             # Batch job Python scripts
 │       ├── resampler.py            # Fibonacci resampling (3d,5d,8d,13d,21d,34d)
-│       ├── consolidate.py          # Merge date=*.parquet → data.parquet
-│       ├── vaccume.py              # Clean up old date=*.parquet files
+│       ├── consolidate.py          # Full consolidation (batch mode, recovery)
+│       ├── vaccume.py              # Deep cleanup (maintenance)
 │       └── requirements.txt        # Python dependencies
 │
 ├── shared/                      # Shared utilities and clients
@@ -48,25 +49,31 @@ batch_layer/
 
 ## 🧩 Components Overview
 
-### 1. Lambda Fetchers (Daily Data Ingestion)
+### 1. Lambda Functions (Serverless)
 
 | Function | File | Purpose | Schedule |
 |----------|------|---------|----------|
 | **OHLCV Fetcher** | `daily_ohlcv_fetcher.py` | Fetch daily OHLCV from Polygon API | 4:05 PM ET |
 | **Meta Fetcher** | `daily_meta_fetcher.py` | Fetch symbol metadata | Daily |
+| **Consolidator** | `consolidate_bronze.py` | Merge daily files + cleanup old files | Daily (after fetcher) |
 
 **Output Path:**
 ```
 s3://dev-condvest-datalake/bronze/raw_ohlcv/symbol=AAPL/date=2025-11-19.parquet
 ```
 
-### 2. Batch Processing Jobs
+### 2. AWS Batch Jobs (Heavy Processing)
 
 | Job | File | Purpose | When to Run |
 |-----|------|---------|-------------|
-| **Consolidator** | `consolidate.py` | Merge daily files → `data.parquet` | Weekly |
-| **Vacuum** | `vaccume.py` | Clean old date files (keep 30 days) | Monthly |
-| **Resampler** | `resampler.py` | Fibonacci resampling to Silver layer | After consolidation |
+| **Resampler** | `resampler.py` | Fibonacci resampling to Silver layer | Weekly/On-demand |
+
+### 3. Maintenance Scripts (Manual/On-demand)
+
+| Script | File | Purpose | When to Run |
+|--------|------|---------|-------------|
+| **Full Consolidator** | `consolidate.py` | Full reconsolidation (batch mode) | Recovery only |
+| **Vacuum** | `vaccume.py` | Deep cleanup of old files | Monthly |
 
 ---
 
@@ -122,39 +129,46 @@ docker push <account>.dkr.ecr.ca-west-1.amazonaws.com/condvest-batch-resampler:l
                     │  Polygon API    │
                     └────────┬────────┘
                              │
-                    ┌────────▼────────┐
-                    │ Lambda Fetcher  │
-                    │ (Daily 4:05 PM) │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┴──────────────┐
-              │                             │
-     ┌────────▼────────┐          ┌────────▼────────┐
-     │       RDS       │          │   S3 Bronze     │
-     │   (3yr cache)   │          │ date=*.parquet  │
-     └─────────────────┘          └────────┬────────┘
-                                           │
-                                  ┌────────▼────────┐
-                                  │  Consolidator   │
-                                  │   (Weekly)      │
-                                  └────────┬────────┘
-                                           │
-                                  ┌────────▼────────┐
-                                  │   S3 Bronze     │
-                                  │ data.parquet    │
-                                  └────────┬────────┘
-                                           │
-                          ┌────────────────┼────────────────┐
-                          │                │                │
-                 ┌────────▼────┐   ┌───────▼──────┐  ┌──────▼─────┐
-                 │   Vacuum    │   │  Resampler   │  │ Analytics  │
-                 │  (Monthly)  │   │   (Weekly)   │  │  (DuckDB)  │
-                 └─────────────┘   └───────┬──────┘  └────────────┘
-                                           │
-                                  ┌────────▼────────┐
-                                  │   S3 Silver     │
-                                  │ 3d,5d,8d,13d... │
-                                  └─────────────────┘
+        ┌────────────────────┴────────────────────┐
+        │                                         │
+┌───────▼────────┐                       ┌────────▼────────┐
+│ Lambda OHLCV   │                       │  Lambda Meta    │
+│   Fetcher      │                       │   Fetcher       │
+│ (4:05 PM ET)   │                       │   (Daily)       │
+└───────┬────────┘                       └─────────────────┘
+        │
+        ├─────────────────┬─────────────────┐
+        │                 │                 │
+┌───────▼────────┐ ┌──────▼──────┐ ┌────────▼────────┐
+│       RDS      │ │ S3 Bronze   │ │ EventBridge     │
+│   (watermark)  │ │ date=*.pqt  │ │ (trigger next)  │
+└────────────────┘ └─────────────┘ └────────┬────────┘
+                                            │
+                                   ┌────────▼────────┐
+                                   │ Lambda          │
+                                   │ Consolidator    │
+                                   │ + Cleanup       │
+                                   │ (Daily)         │
+                                   └────────┬────────┘
+                                            │
+                                   ┌────────▼────────┐
+                                   │   S3 Bronze     │
+                                   │ data.parquet    │
+                                   │ (consolidated)  │
+                                   └────────┬────────┘
+                                            │
+                          ┌─────────────────┼─────────────────┐
+                          │                                   │
+                 ┌────────▼────────┐               ┌──────────▼────────┐
+                 │   AWS Batch     │               │  Analytics/API    │
+                 │   Resampler     │               │    (DuckDB)       │
+                 │   (Weekly)      │               └───────────────────┘
+                 └────────┬────────┘
+                          │
+                 ┌────────▼────────┐
+                 │   S3 Silver     │
+                 │ 3d,5d,8d,13d... │
+                 └─────────────────┘
 ```
 
 ---
@@ -186,7 +200,35 @@ RDS_SECRET_ARN=arn:aws:secretsmanager:ca-west-1:xxx
 
 ## 📝 Job Usage
 
-### Consolidation Job
+### Lambda Consolidator (Daily - Recommended)
+
+The consolidator Lambda handles daily incremental consolidation + cleanup:
+
+```python
+# Event for Lambda invocation (via EventBridge or manual)
+{
+    "mode": "incremental",       # "incremental" (default) or "full"
+    "symbols": ["AAPL", "MSFT"], # Optional: specific symbols (empty = all new)
+    "retention_days": 30,        # Days to keep date files
+    "skip_cleanup": false        # Skip vacuum step
+}
+```
+
+```bash
+# Invoke Lambda manually via CLI
+aws lambda invoke \
+    --function-name consolidate-bronze-daily \
+    --payload '{"mode": "incremental"}' \
+    output.json
+
+# Test locally
+cd fetching/lambda_functions
+python consolidate_bronze.py
+```
+
+### Batch Consolidation (Recovery/Full)
+
+For first-time full consolidation or recovery (runs in AWS Batch):
 
 ```bash
 # Run on all symbols (first run will take ~6 hours)
@@ -199,7 +241,9 @@ python consolidate.py --symbols AAPL,MSFT,GOOGL
 python consolidate.py --force-full
 ```
 
-### Vacuum/Cleanup Job
+### Vacuum/Cleanup Job (Maintenance)
+
+Deep cleanup for special cases (integrated cleanup runs with Lambda consolidator):
 
 ```bash
 # Dry run (see what would be deleted)
