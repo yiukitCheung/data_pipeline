@@ -390,13 +390,13 @@ def main():
     )
     
     parser.add_argument('--use-test-tables', action='store_true',
-                       help='Use test_ prefix for local database tables')
+                        help='Use test_ prefix for local database tables')
     parser.add_argument('--skip-indexes', action='store_true',
-                       help='Drop indexes before migration, recreate after (MUCH faster)')
+                        help='Drop indexes before migration, recreate after (MUCH faster)')
     parser.add_argument('--method', type=str, choices=['bulk', 'copy'], default='bulk',
-                       help='Migration method: bulk (INSERT) or copy (COPY - fastest)')
+                        help='Migration method: bulk (INSERT) or copy (COPY - fastest)')
     parser.add_argument('--table', type=str,
-                       help='Migrate only specific table')
+                        help='Migrate only specific table')
     
     args = parser.parse_args()
     

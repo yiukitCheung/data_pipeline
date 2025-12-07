@@ -40,9 +40,17 @@ s3://dev-condvest-datalake/bronze/raw_ohlcv/
 
 ### ✅ 2. AWS Batch Resampler (Production Ready)
 
-**Status:** ✅ **DEPLOYED AND VALIDATED**
+**Status:** ✅ **DEPLOYED AND SCHEDULED**
 
 **File:** `processing/batch_jobs/resampler.py`
+
+**AWS Resources:**
+| Resource | Name | Status |
+|----------|------|--------|
+| Job Definition | `dev-batch-duckdb-resampler` | ✅ Active |
+| EventBridge Rule | `dev-resampler-daily-schedule` | ✅ Enabled |
+| Schedule | Daily at 21:20 UTC (4:20 PM ET) | ✅ Configured |
+| Docker Image | `dev-batch-processor:latest` | ✅ Built |
 
 **Achievement:**
 - Successfully processed **10,842,928 records** across all 6 Fibonacci intervals
@@ -105,9 +113,9 @@ s3://dev-condvest-datalake/processing_metadata/
 **AWS Resources:**
 | Resource | Name | Status |
 |----------|------|--------|
-| Job Definition | `dev-batch-bronze-consolidator` | ✅ Active (rev 1) |
+| Job Definition | `dev-batch-bronze-consolidator` | ✅ Active |
 | EventBridge Rule | `dev-consolidator-daily-schedule` | ✅ Enabled |
-| Schedule | Daily at 6:00 AM UTC | ✅ Configured |
+| Schedule | Daily at 21:10 UTC (4:10 PM ET) | ✅ Configured |
 | Docker Image | `dev-batch-processor:latest` | ✅ Built |
 
 **Purpose:** Merges daily `date=*.parquet` files into single `data.parquet` per symbol for fast reading.
@@ -200,19 +208,27 @@ python vaccume.py --retention-days 60
 
 ## 📊 Complete Data Pipeline Flow
 
+### Daily Schedule (All Times UTC)
+
+| Time (UTC) | Time (ET) | Job | Duration |
+|------------|-----------|-----|----------|
+| **21:05** | 4:05 PM | OHLCV Fetcher (Lambda) | ~5 min |
+| **21:10** | 4:10 PM | Consolidator (AWS Batch) | ~8 min |
+| **21:20** | 4:20 PM | Resampler (AWS Batch) | ~5 min |
+
+**Total Pipeline Time:** ~20-25 minutes after market close
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                         BATCH LAYER DATA FLOW                             │
+│                    BATCH LAYER DATA FLOW (AUTOMATED)                      │
 ├──────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
-│   ┌─────────────┐                                                        │
-│   │ Polygon API │                                                        │
-│   └──────┬──────┘                                                        │
+│   Market Close: 4:00 PM ET (21:00 UTC)                                   │
 │          │                                                               │
-│          ▼                                                               │
+│          ▼ +5 min                                                        │
 │   ┌─────────────────────┐                                                │
-│   │ Lambda Fetcher      │  Daily 4:05 PM ET (EventBridge)               │
-│   │ daily_ohlcv_fetcher │                                                │
+│   │ Lambda Fetcher      │  21:05 UTC (EventBridge)                      │
+│   │ daily_ohlcv_fetcher │  Fetches daily OHLCV from Polygon API         │
 │   └──────────┬──────────┘                                                │
 │              │                                                           │
 │     ┌────────┴────────┐                                                  │
@@ -223,11 +239,11 @@ python vaccume.py --retention-days 60
 │  │ (cache) │   │ symbol=*/date=*   │  ← Daily incremental files        │
 │  └─────────┘   └─────────┬─────────┘                                    │
 │                          │                                               │
-│                          ▼                                               │
+│                          ▼ +5 min                                        │
 │              ┌───────────────────────┐                                   │
-│              │  Consolidation Job    │  Daily 6:00 AM UTC (EventBridge) │
+│              │  Consolidation Job    │  21:10 UTC (EventBridge)         │
 │              │   consolidator.py     │  AWS Batch (Fargate)             │
-│              │   + Integrated Cleanup│                                   │
+│              │   + Integrated Cleanup│  Merges date files → data.parquet│
 │              └───────────┬───────────┘                                   │
 │                          │                                               │
 │                          ▼                                               │
@@ -236,19 +252,20 @@ python vaccume.py --retention-days 60
 │              │  symbol=*/data.parquet│  ← Consolidated files (fast!)    │
 │              └───────────┬───────────┘                                   │
 │                          │                                               │
-│         ┌────────────────┼────────────────┐                              │
-│         │                │                │                              │
-│         ▼                ▼                ▼                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                      │
-│  │ Vacuum      │  │  Resampler  │  │  Analytics  │                      │
-│  │ (manual)    │  │ resampler.py│  │  (DuckDB)   │                      │
-│  └─────────────┘  └──────┬──────┘  └─────────────┘                      │
+│                          ▼ +10 min                                       │
+│              ┌───────────────────────┐                                   │
+│              │  Resampler Job        │  21:20 UTC (EventBridge)         │
+│              │   resampler.py        │  AWS Batch (Fargate)             │
+│              │   Fibonacci intervals │  3d, 5d, 8d, 13d, 21d, 34d       │
+│              └───────────┬───────────┘                                   │
 │                          │                                               │
 │                          ▼                                               │
 │              ┌───────────────────────┐                                   │
 │              │      S3 Silver        │                                   │
 │              │  silver_3d, 5d, 8d... │  ← Fibonacci resampled data      │
 │              └───────────────────────┘                                   │
+│                                                                          │
+│   Pipeline Complete: ~21:30 UTC (4:30 PM ET)                             │
 │                                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -257,32 +274,55 @@ python vaccume.py --retention-days 60
 
 ## 📋 Jobs Summary
 
-| Job | Type | File | Schedule | Purpose |
-|-----|------|------|----------|---------|
-| **OHLCV Fetcher** | Lambda | `daily_ohlcv_fetcher.py` | Daily 4:05 PM ET | Fetch daily OHLCV data |
-| **Meta Fetcher** | Lambda | `daily_meta_fetcher.py` | Daily | Fetch symbol metadata |
-| **Consolidator** | AWS Batch | `consolidator.py` | Daily 6:00 AM UTC | Merge date files + cleanup |
-| **Vacuum** | Local Script | `vaccume.py` | Manual/Monthly | Deep clean old date files |
-| **Resampler** | AWS Batch | `resampler.py` | After consolidation | Fibonacci resampling |
+| Job | Type | File | Schedule (UTC) | EventBridge Rule | Purpose |
+|-----|------|------|----------------|------------------|---------|
+| **OHLCV Fetcher** | Lambda | `daily_ohlcv_fetcher.py` | 21:05 UTC | `dev-batch-daily-ohlcv-fetcher` | Fetch daily OHLCV data |
+| **Meta Fetcher** | Lambda | `daily_meta_fetcher.py` | Daily | `dev-batch-daily-meta-fetcher` | Fetch symbol metadata |
+| **Consolidator** | AWS Batch | `consolidator.py` | 21:10 UTC | `dev-consolidator-daily-schedule` | Merge date files + cleanup |
+| **Resampler** | AWS Batch | `resampler.py` | 21:20 UTC | `dev-resampler-daily-schedule` | Fibonacci resampling |
+| **Vacuum** | Local Script | `vaccume.py` | Manual | N/A | Deep clean old date files |
 
 ---
 
-## 🚀 Recommended Execution Order
+## 🚀 Daily Execution Order (Fully Automated)
 
-### Daily (Automated via EventBridge)
+All jobs run automatically via EventBridge after market close:
+
 ```
-1. Lambda Fetcher (4:05 PM ET) → Writes date=*.parquet + RDS
-2. Consolidator Job (6:00 AM UTC next day) → Merges to data.parquet + cleanup
+Market Close (4:00 PM ET / 21:00 UTC)
+         │
+         ▼ 21:05 UTC
+   ┌─────────────────────────────────────────────────────────┐
+   │ 1. OHLCV Fetcher (Lambda)                               │
+   │    → Fetches new daily data from Polygon API            │
+   │    → Writes to S3 Bronze (date=*.parquet) + RDS         │
+   └─────────────────────────────────────────────────────────┘
+         │
+         ▼ 21:10 UTC
+   ┌─────────────────────────────────────────────────────────┐
+   │ 2. Consolidator (AWS Batch)                             │
+   │    → Merges date=*.parquet → data.parquet               │
+   │    → Cleans up old date files (>30 days)                │
+   └─────────────────────────────────────────────────────────┘
+         │
+         ▼ 21:20 UTC
+   ┌─────────────────────────────────────────────────────────┐
+   │ 3. Resampler (AWS Batch)                                │
+   │    → Reads consolidated data.parquet files              │
+   │    → Creates Fibonacci resampled data (3d-34d)          │
+   │    → Writes to S3 Silver layer                          │
+   └─────────────────────────────────────────────────────────┘
+         │
+         ▼ ~21:30 UTC
+   ┌─────────────────────────────────────────────────────────┐
+   │ ✅ Pipeline Complete                                     │
+   │    → Fresh data available for analytics/backtesting     │
+   └─────────────────────────────────────────────────────────┘
 ```
 
-### Weekly/On-Demand (Manual)
+### Monthly Maintenance (Manual)
 ```
-1. Resampler → Reads data.parquet → Writes silver layer
-```
-
-### Monthly (Maintenance)
-```
-1. Vacuum Script (local) → Deep cleanup of old date files
+1. Vacuum Script (local) → Deep cleanup of old date files if needed
 2. RDS Retention Job → Archive old RDS data
 ```
 
@@ -442,5 +482,10 @@ aws_lambda_architecture/batch_layer/
 
 ---
 
-**Last Updated:** December 6, 2025  
-**Status:** ✅ Batch Layer 100% Complete - All jobs deployed and scheduled
+**Last Updated:** December 7, 2025  
+**Status:** ✅ Batch Layer 100% Complete - All jobs deployed and automated via EventBridge
+
+**Daily Pipeline Schedule (UTC):**
+- 21:05 - OHLCV Fetcher (Lambda)
+- 21:10 - Consolidator (AWS Batch)
+- 21:20 - Resampler (AWS Batch)
