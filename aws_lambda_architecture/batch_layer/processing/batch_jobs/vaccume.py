@@ -183,10 +183,18 @@ class BronzeLayerCleaner:
         """Get the latest date from data.parquet for a symbol"""
         try:
             s3_path = f"s3://{self.s3_bucket}/{self.s3_prefix}/symbol={symbol}/data.parquet"
-            result = self.conn.execute(f"""
-                SELECT MAX(CAST(timestamp_1 AS DATE)) as latest_date
-                FROM read_parquet('{s3_path}')
-            """).fetchone()
+            # Try 'timestamp' first (current standard), fall back to 'timestamp_1' (legacy)
+            try:
+                result = self.conn.execute(f"""
+                    SELECT MAX(CAST(timestamp AS DATE)) as latest_date
+                    FROM read_parquet('{s3_path}')
+                """).fetchone()
+            except:
+                # Fallback to legacy column name
+                result = self.conn.execute(f"""
+                    SELECT MAX(CAST(timestamp_1 AS DATE)) as latest_date
+                    FROM read_parquet('{s3_path}')
+                """).fetchone()
             
             if result and result[0]:
                 return result[0]

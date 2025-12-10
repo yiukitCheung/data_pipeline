@@ -215,9 +215,9 @@ class BronzeConsolidator:
             
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT symbol, max_date 
+                SELECT symbol, latest_date 
                 FROM data_ingestion_watermark 
-                WHERE data_type = 'ohlcv'
+                WHERE is_current = TRUE
                 ORDER BY symbol
             """)
             
@@ -406,14 +406,18 @@ class BronzeConsolidator:
             new_file_paths = [f"s3://{self.s3_bucket}/{f['key']}" for f in new_files]
             paths_str = "', '".join(new_file_paths)
             
+            # Standard columns to select (handles schema mismatches)
+            STANDARD_COLUMNS = "symbol, open, high, low, close, volume, timestamp, interval"
+            
             # Check if data.parquet exists
             has_existing_data = self._check_data_parquet_exists(symbol)
             
             if has_existing_data:
+                # Use explicit columns to handle schema mismatch (e.g., __index_level_0__)
                 merge_sql = f"""
-                    SELECT * FROM read_parquet('{data_parquet_path}')
+                    SELECT {STANDARD_COLUMNS} FROM read_parquet('{data_parquet_path}')
                     UNION ALL
-                    SELECT * FROM read_parquet(['{paths_str}'])
+                    SELECT {STANDARD_COLUMNS} FROM read_parquet(['{paths_str}'])
                 """
             else:
                 all_files = self._list_date_files(symbol)
@@ -425,7 +429,7 @@ class BronzeConsolidator:
                 
                 all_paths = [f"s3://{self.s3_bucket}/{f['key']}" for f in all_files]
                 paths_str = "', '".join(all_paths)
-                merge_sql = f"SELECT * FROM read_parquet(['{paths_str}'])"
+                merge_sql = f"SELECT {STANDARD_COLUMNS} FROM read_parquet(['{paths_str}'])"
             
             # Execute consolidation
             df = thread_conn.execute(merge_sql).fetchdf()
@@ -437,7 +441,8 @@ class BronzeConsolidator:
             from io import BytesIO
             
             buffer = BytesIO()
-            table = pa.Table.from_pandas(df)
+            # preserve_index=False prevents adding __index_level_0__ column
+            table = pa.Table.from_pandas(df, preserve_index=False)
             pq.write_table(table, buffer, compression='snappy')
             buffer.seek(0)
             
@@ -448,7 +453,13 @@ class BronzeConsolidator:
             )
             
             result['rows_consolidated'] = len(df)
-            result['latest_date'] = df['timestamp_1'].max() if 'timestamp_1' in df.columns else None
+            # Handle both column names for backward compatibility
+            if 'timestamp' in df.columns:
+                result['latest_date'] = df['timestamp'].max()
+            elif 'timestamp_1' in df.columns:
+                result['latest_date'] = df['timestamp_1'].max()
+            else:
+                result['latest_date'] = None
             
             # Cleanup old date files
             if not skip_cleanup:

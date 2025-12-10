@@ -137,8 +137,9 @@ $$ LANGUAGE plpgsql;
 -- Test Function
 
 -- Test Fetch Symbol Range
-SELECT * FROM Fetch_Symbol_Range('AAPL', 30)
+SELECT * FROM Fetch_Symbol_Range('AAPL', 60)
 -- Test Fetch Symbol Period
 SELECT * FROM Fetch_Symbol_Period('AAPL', 'YTD')
 -- Test Growth Pct
 SELECT * FROM Growth('AAPL', 30)
+

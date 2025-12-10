@@ -1,0 +1,277 @@
+{
+  "Comment": "Optimized Daily OHLCV Pipeline with Parallel Execution",
+  "StartAt": "ParallelFetchers",
+  "States": {
+    "ParallelFetchers": {
+      "Type": "Parallel",
+      "Comment": "Run OHLCV and Metadata fetchers in parallel",
+      "Branches": [
+        {
+          "StartAt": "FetchOHLCV",
+          "States": {
+            "FetchOHLCV": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:ca-west-1:471112909340:function:dev-batch-daily-ohlcv-fetcher",
+                "Payload": {
+                  "skip_market_check": false,
+                  "backfill_missing": true,
+                  "max_backfill_days": 7
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true,
+              "ResultPath": "$.ohlcvResult"
+            }
+          }
+        },
+        {
+          "StartAt": "FetchMetadata",
+          "States": {
+            "FetchMetadata": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "arn:aws:lambda:ca-west-1:471112909340:function:dev-batch-daily-meta-fetcher",
+                "Payload": {}
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true,
+              "ResultPath": "$.metadataResult"
+            }
+          }
+        }
+      ],
+      "Next": "RunConsolidator",
+      "ResultPath": "$.fetcherResults",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "RunConsolidator": {
+      "Type": "Task",
+      "Comment": "Consolidate bronze layer data (merge date files into data.parquet)",
+      "Resource": "arn:aws:states:::batch:submitJob.sync",
+      "Parameters": {
+        "JobName.$": "States.Format('consolidator-{}', $$.Execution.Name)",
+        "JobDefinition": "dev-batch-bronze-consolidator",
+        "JobQueue": "dev-batch-duckdb-resampler",
+        "ContainerOverrides": {
+          "Environment": [
+            {"Name": "MODE", "Value": "incremental"},
+            {"Name": "MAX_WORKERS", "Value": "10"}
+          ]
+        }
+      },
+      "Next": "ParallelResamplers",
+      "ResultPath": "$.consolidatorResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Batch.AWSBatchException"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 1,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "ParallelResamplers": {
+      "Type": "Parallel",
+      "Comment": "Run all Fibonacci interval resamplers in parallel (3d, 5d, 8d, 13d, 21d, 34d)",
+      "Branches": [
+        {
+          "StartAt": "Resample3d",
+          "States": {
+            "Resample3d": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName.$": "States.Format('resampler-3d-{}', $$.Execution.Name)",
+                "JobDefinition": "dev-batch-duckdb-resampler",
+                "JobQueue": "dev-batch-duckdb-resampler",
+                "ContainerOverrides": {
+                  "Environment": [
+                    {"Name": "RESAMPLING_INTERVALS", "Value": "3"},
+                    {"Name": "RESAMPLING_RETENTION_YEARS", "Value": "5"}
+                  ]
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Resample5d",
+          "States": {
+            "Resample5d": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName.$": "States.Format('resampler-5d-{}', $$.Execution.Name)",
+                "JobDefinition": "dev-batch-duckdb-resampler",
+                "JobQueue": "dev-batch-duckdb-resampler",
+                "ContainerOverrides": {
+                  "Environment": [
+                    {"Name": "RESAMPLING_INTERVALS", "Value": "5"},
+                    {"Name": "RESAMPLING_RETENTION_YEARS", "Value": "5"}
+                  ]
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Resample8d",
+          "States": {
+            "Resample8d": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName.$": "States.Format('resampler-8d-{}', $$.Execution.Name)",
+                "JobDefinition": "dev-batch-duckdb-resampler",
+                "JobQueue": "dev-batch-duckdb-resampler",
+                "ContainerOverrides": {
+                  "Environment": [
+                    {"Name": "RESAMPLING_INTERVALS", "Value": "8"},
+                    {"Name": "RESAMPLING_RETENTION_YEARS", "Value": "5"}
+                  ]
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Resample13d",
+          "States": {
+            "Resample13d": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName.$": "States.Format('resampler-13d-{}', $$.Execution.Name)",
+                "JobDefinition": "dev-batch-duckdb-resampler",
+                "JobQueue": "dev-batch-duckdb-resampler",
+                "ContainerOverrides": {
+                  "Environment": [
+                    {"Name": "RESAMPLING_INTERVALS", "Value": "13"},
+                    {"Name": "RESAMPLING_RETENTION_YEARS", "Value": "5"}
+                  ]
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Resample21d",
+          "States": {
+            "Resample21d": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName.$": "States.Format('resampler-21d-{}', $$.Execution.Name)",
+                "JobDefinition": "dev-batch-duckdb-resampler",
+                "JobQueue": "dev-batch-duckdb-resampler",
+                "ContainerOverrides": {
+                  "Environment": [
+                    {"Name": "RESAMPLING_INTERVALS", "Value": "21"},
+                    {"Name": "RESAMPLING_RETENTION_YEARS", "Value": "5"}
+                  ]
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Resample34d",
+          "States": {
+            "Resample34d": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName.$": "States.Format('resampler-34d-{}', $$.Execution.Name)",
+                "JobDefinition": "dev-batch-duckdb-resampler",
+                "JobQueue": "dev-batch-duckdb-resampler",
+                "ContainerOverrides": {
+                  "Environment": [
+                    {"Name": "RESAMPLING_INTERVALS", "Value": "34"},
+                    {"Name": "RESAMPLING_RETENTION_YEARS", "Value": "5"}
+                  ]
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "PipelineComplete",
+      "ResultPath": "$.resamplerResults",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "NotifyFailure": {
+      "Type": "Task",
+      "Comment": "Send SNS notification on pipeline failure",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ca-west-1:471112909340:condvest-pipeline-alerts",
+        "Subject": "🚨 Daily OHLCV Pipeline Failed",
+        "Message.$": "States.Format('Pipeline execution {} failed. Error: {}', $$.Execution.Name, $.error)"
+      },
+      "Next": "PipelineFailed",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PipelineFailed"
+        }
+      ]
+    },
+
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "PipelineExecutionFailed",
+      "Cause": "One or more pipeline stages failed"
+    },
+
+    "PipelineComplete": {
+      "Type": "Succeed",
+      "Comment": "Pipeline completed successfully"
+    }
+  }
+}
+

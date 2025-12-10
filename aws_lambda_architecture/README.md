@@ -19,15 +19,19 @@ This directory contains the AWS-native implementation of the Condvest data pipel
 │   └─────────┼────────────────────────────────────────┼──────────────────────┘   │
 │             │                                        │                          │
 │   ┌─────────▼────────────────────────┐   ┌──────────▼────────────────────┐     │
-│   │      BATCH LAYER (✅ 95%)         │   │     SPEED LAYER (⚠️ 50%)      │     │
+│   │     BATCH LAYER (✅ 100%)         │   │     SPEED LAYER (⚠️ 50%)      │     │
 │   │                                  │   │                               │     │
-│   │  Lambda Fetcher → S3 Bronze      │   │  ECS Fargate → Kinesis        │     │
-│   │         ↓                        │   │         ↓                     │     │
-│   │  Consolidator → data.parquet     │   │  Kinesis Analytics (Flink)    │     │
-│   │         ↓                        │   │         ↓                     │     │
-│   │  Resampler → S3 Silver           │   │  DynamoDB (tick storage)      │     │
-│   │         ↓                        │   │                               │     │
-│   │  Vacuum → Cleanup old files      │   │                               │     │
+│   │  ┌────────────────────────────┐  │   │  ECS Fargate → Kinesis        │     │
+│   │  │   Step Functions Pipeline  │  │   │         ↓                     │     │
+│   │  │  ┌────────┐ ┌────────┐    │  │   │  Kinesis Analytics (Flink)    │     │
+│   │  │  │Fetchers│→│Consol. │    │  │   │         ↓                     │     │
+│   │  │  │(Lambda)│ │(Batch) │    │  │   │  DynamoDB (tick storage)      │     │
+│   │  │  └────────┘ └───┬────┘    │  │   │                               │     │
+│   │  │       ┌─────────▼──────┐  │  │   │                               │     │
+│   │  │       │Resamplers (6x) │  │  │   │                               │     │
+│   │  │       │  (Parallel)    │  │  │   │                               │     │
+│   │  │       └────────────────┘  │  │   │                               │     │
+│   │  └────────────────────────────┘  │   │                               │     │
 │   └──────────────────────────────────┘   └───────────────────────────────┘     │
 │                        │                              │                         │
 │                        └──────────────┬───────────────┘                         │
@@ -50,7 +54,7 @@ This directory contains the AWS-native implementation of the Condvest data pipel
 
 ```
 aws_lambda_architecture/
-├── batch_layer/                 # ✅ Daily batch processing (95% complete)
+├── batch_layer/                 # ✅ Daily batch processing (100% complete)
 │   ├── database/               # Database schemas
 │   ├── fetching/               # Lambda functions
 │   │   └── lambda_functions/
@@ -58,11 +62,17 @@ aws_lambda_architecture/
 │   │       └── daily_meta_fetcher.py
 │   ├── processing/             # AWS Batch jobs
 │   │   └── batch_jobs/
+│   │       ├── consolidator.py     # Merge date files
 │   │       ├── resampler.py        # Fibonacci resampling
-│   │       ├── consolidate.py      # Merge date files
-│   │       └── vaccume.py          # Cleanup old files
+│   │       └── vaccume.py          # Cleanup old files (local)
+│   ├── infrastructure/         # Deployment & orchestration
+│   │   ├── fetching/           # Lambda deployment scripts
+│   │   ├── processing/         # Batch container & job deployment
+│   │   └── orchestration/      # Step Functions pipeline
+│   │       ├── state_machine_definition.json
+│   │       └── deploy_step_functions.sh
 │   ├── shared/                 # Shared utilities
-│   └── README.md
+│   └── BATCH_LAYER_IMPLEMENTATION_SUMMARY.md
 │
 ├── speed_layer/                 # ⚠️ Real-time processing (50% complete)
 │   ├── data_fetcher/           # ECS WebSocket service
@@ -85,7 +95,7 @@ aws_lambda_architecture/
 
 ## ✅ Implementation Status
 
-### Batch Layer (95% Complete)
+### Batch Layer (100% Complete) 🎉
 
 | Component | Status | Description |
 |-----------|--------|-------------|
@@ -93,11 +103,13 @@ aws_lambda_architecture/
 | **Lambda Meta Fetcher** | ✅ Deployed | Symbol metadata updates |
 | **Watermark System** | ✅ Working | Incremental processing tracking |
 | **S3 Bronze Layer** | ✅ Working | Raw data storage (symbol partitioned) |
-| **Consolidation Job** | ✅ Implemented | Merge date files → data.parquet |
-| **Vacuum Job** | ✅ Implemented | Cleanup old date files |
-| **Resampler** | ✅ Validated | Fibonacci resampling (3d-34d) |
+| **Consolidation Job** | ✅ Deployed | AWS Batch: Merge date files → data.parquet |
+| **Vacuum/Cleanup** | ✅ Integrated | Consolidator cleans up old files |
+| **Resampler** | ✅ Deployed | AWS Batch: Fibonacci resampling (3d-34d) |
 | **Checkpoint System** | ✅ Working | Incremental resampling |
 | **S3 Silver Layer** | ✅ Validated | Resampled data storage |
+| **Step Functions** | ✅ Deployed | Pipeline orchestration with parallel execution |
+| **SNS Alerts** | ✅ Configured | Failure notifications |
 
 ### Speed Layer (50% Complete)
 
@@ -129,21 +141,38 @@ aws_lambda_architecture/
 cd data_pipeline
 source .dp/bin/activate
 
-# Run consolidation
+# Run consolidation locally
 cd aws_lambda_architecture/batch_layer/processing/batch_jobs
-python consolidate.py --symbols AAPL,MSFT
+python consolidator.py --mode incremental --max-workers 10
 
 # Run vacuum (dry-run)
 python vaccume.py --dry-run
 
-# Run resampler
+# Run resampler locally
 python resampler.py
+```
+
+### Manual Pipeline Trigger (AWS)
+
+```bash
+# Trigger the entire Step Functions pipeline
+aws stepfunctions start-execution \
+  --state-machine-arn "arn:aws:states:ca-west-1:471112909340:stateMachine:condvest-daily-ohlcv-pipeline" \
+  --name "manual-$(date +%Y%m%d%H%M%S)" \
+  --region ca-west-1
+
+# Or trigger individual Batch jobs
+aws batch submit-job \
+  --job-name manual-consolidator-$(date +%Y%m%d%H%M%S) \
+  --job-queue dev-batch-duckdb-resampler \
+  --job-definition dev-batch-bronze-consolidator \
+  --region ca-west-1
 ```
 
 ### Deploy Lambda Functions
 
 ```bash
-cd aws_lambda_architecture/batch_layer/fetching/deployment_packages
+cd aws_lambda_architecture/batch_layer/infrastructure/fetching/deployment_packages
 ./deploy_lambda.sh daily-ohlcv-fetcher
 ```
 
@@ -151,19 +180,38 @@ cd aws_lambda_architecture/batch_layer/fetching/deployment_packages
 
 ## 📊 Data Pipeline Summary
 
-### Daily Flow (Automated)
-```
-4:05 PM ET → Lambda Fetcher → S3 Bronze (date=*.parquet) + RDS
-```
+### Daily Flow (Fully Automated via Step Functions)
 
-### Weekly Flow (Manual/Scheduled)
 ```
-Consolidation → data.parquet → Resampler → S3 Silver
+Market Close (4:00 PM ET)
+         │
+         ▼ 4:05 PM ET (21:05 UTC)
+   EventBridge → Step Functions Pipeline
+         │
+         ▼ STAGE 1 (Parallel)
+   ┌─────────────┬──────────────────┐
+   │ OHLCV Fetch │  Metadata Fetch  │  ← Lambda (2 retries each)
+   └─────────────┴──────────────────┘
+         │
+         ▼ STAGE 2 (Sequential)
+   ┌────────────────────────────────┐
+   │ Consolidator (AWS Batch)       │  ← Merges date files + cleanup
+   └────────────────────────────────┘
+         │
+         ▼ STAGE 3 (Parallel - 6x)
+   ┌────┬────┬────┬─────┬─────┬─────┐
+   │ 3d │ 5d │ 8d │ 13d │ 21d │ 34d │  ← All resamplers in parallel!
+   └────┴────┴────┴─────┴─────┴─────┘
+         │
+         ▼ ~4:23 PM ET
+   ✅ Pipeline Complete (~18 min total)
+
+   ON FAILURE → SNS Alert → Email notification
 ```
 
 ### Monthly Flow (Maintenance)
 ```
-Vacuum → Clean old date files → Save storage costs
+Vacuum Script (local) → Deep clean old date files if needed
 ```
 
 ---
@@ -175,8 +223,10 @@ Vacuum → Clean old date files → Save storage costs
 | Lambda (fetchers) | $5 |
 | RDS (t3.micro) | $20 |
 | S3 Storage | $10 |
-| AWS Batch | $10 |
-| **Batch Layer Total** | **$45** |
+| AWS Batch | $15 |
+| Step Functions | $2 |
+| SNS Alerts | $1 |
+| **Batch Layer Total** | **$53** |
 | | |
 | Kinesis Streams | $50 |
 | Kinesis Analytics | $50 |
@@ -194,8 +244,8 @@ Vacuum → Clean old date files → Save storage costs
 
 ## 📚 Documentation
 
-- [**Batch Layer README**](./batch_layer/README.md) - Detailed batch layer docs
-- [**Implementation Summary**](./batch_layer/BATCH_LAYER_IMPLEMENTATION_SUMMARY.md) - Full implementation details
+- [**Batch Layer Summary**](./batch_layer/BATCH_LAYER_IMPLEMENTATION_SUMMARY.md) - Full implementation details
+- [**Orchestration README**](./batch_layer/infrastructure/orchestration/README.md) - Step Functions pipeline
 - [**Speed Layer README**](./speed_layer/README.md) - Real-time processing docs
 
 ---
@@ -208,8 +258,11 @@ Vacuum → Clean old date files → Save storage costs
 4. **Incremental Processing**: Smart data compaction
 5. **Cost-Optimized**: ~$200/month for full stack
 6. **Industry Standards**: Delta Lake/Iceberg-style patterns
+7. **Orchestrated Pipeline**: Step Functions for reliability & visibility
+8. **Parallel Execution**: ~3x faster with parallel resamplers
+9. **Failure Alerts**: SNS notifications on pipeline failures
 
 ---
 
-**Last Updated:** December 3, 2025  
-**Overall Status:** Batch Layer Production-Ready, Speed/Serving Layers In Progress
+**Last Updated:** December 10, 2025  
+**Overall Status:** ✅ Batch Layer 100% Complete & Automated | Speed/Serving Layers In Progress
