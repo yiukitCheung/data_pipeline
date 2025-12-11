@@ -136,21 +136,23 @@ class BronzeConsolidator:
             logger.error(f"Failed to get RDS credentials: {e}")
             return None
     
-    def _read_consolidation_metadata(self) -> Dict[str, date]:
+    def _read_consolidation_metadata(self) -> Dict[str, Tuple[date, int]]:
         """Read consolidation metadata from S3"""
         try:
             s3_path = f"s3://{self.s3_bucket}/{METADATA_KEY}"
             df = self.conn.execute(f"""
-                SELECT symbol, last_consolidated_date
+                SELECT symbol, last_consolidated_date, row_count
                 FROM read_parquet('{s3_path}')
             """).fetchdf()
             
-            return {
-                row['symbol']: row['last_consolidated_date'].date() 
-                if hasattr(row['last_consolidated_date'], 'date') 
-                else row['last_consolidated_date']
-                for _, row in df.iterrows()
-            }
+            result = {}
+            for _, row in df.iterrows():
+                dt = row['last_consolidated_date']
+                if hasattr(dt, 'date'):
+                    dt = dt.date()
+                row_count = int(row['row_count']) if row['row_count'] is not None else 0
+                result[row['symbol']] = (dt, row_count)
+            return result
         except Exception as e:
             logger.info(f"No consolidation metadata found (first run): {e}")
             return {}
