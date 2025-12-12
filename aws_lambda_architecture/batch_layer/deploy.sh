@@ -29,9 +29,25 @@ deploy_all() {
     
     # Then, build and push container (now that ECR exists)
     echo "🐳 Building and pushing container..."
-    if [ -f "processing/container_images/build_container.sh" ]; then
-        cd processing/container_images
-        ./build_container.sh
+    if [ -f "infrastructure/processing/build_batch_container.sh" ]; then
+        cd infrastructure/processing
+        ./build_batch_container.sh
+        cd ../..
+    fi
+    
+    # Deploy AWS Batch job definitions
+    echo "📦 Deploying AWS Batch job definitions..."
+    if [ -f "infrastructure/processing/deploy_batch_jobs.sh" ]; then
+        cd infrastructure/processing
+        ./deploy_batch_jobs.sh
+        cd ../..
+    fi
+    
+    # Deploy Step Functions orchestration
+    echo "🔄 Deploying Step Functions..."
+    if [ -f "infrastructure/orchestration/deploy_step_functions.sh" ]; then
+        cd infrastructure/orchestration
+        ./deploy_step_functions.sh
         cd ../..
     fi
 }
@@ -42,38 +58,25 @@ build_artifacts() {
     
     echo "📦 Building deployment artifacts..."
     
-    # Build Lambda Layer first (contains heavy dependencies)
-    if [ -f "fetching/deployment_packages/build_layer.sh" ]; then
-        echo "🔧 Building Lambda Layer..."
-        cd fetching/deployment_packages
-        ./build_layer.sh --publish
-        cd ../..
-    fi
-    
-    # Build Lambda packages (now lightweight without heavy deps)
-    if [ -f "fetching/deployment_packages/build_packages.sh" ]; then
-        echo "🔧 Building Lambda packages..."
-        cd fetching/deployment_packages
-        ./build_packages.sh
-        cd ../..
+    # Build Lambda packages
+    if [ -f "infrastructure/fetching/deployment_packages/deploy_lambda.sh" ]; then
+        echo "🔧 Building and deploying Lambda packages..."
+        cd infrastructure/fetching/deployment_packages
+        ./deploy_lambda.sh
+        cd ../../..
     fi
     
     # Build container images (but only push to ECR if not skipping)
-    if [ -f "processing/container_images/build_container.sh" ]; then
+    if [ -f "infrastructure/processing/build_batch_container.sh" ]; then
         echo "🐳 Building container images..."
-        cd processing/container_images
+        cd infrastructure/processing
         if [ "$skip_ecr_push" = "true" ]; then
             # Build only, don't push to ECR
             echo "🔧 Building container (skipping ECR push)..."
-            docker build \
-                -f "$(pwd)/Dockerfile" \
-                -t "dev-batch-fibonacci-resampler:latest" \
-                --build-arg BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-                --build-arg VCS_REF="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')" \
-                "$(dirname "$(pwd)")/.."
+            ./build_batch_container.sh --local-only
         else
             # Build and push to ECR
-            ./build_container.sh
+            ./build_batch_container.sh
         fi
         cd ../..
     fi
@@ -130,16 +133,15 @@ show_summary() {
     if [ "$COMPONENT" = "all" ]; then
         echo ""
         echo "📋 Deployed Components:"
-        echo "  ✅ Infrastructure (RDS, ECR, Lambda, Batch, EventBridge)"
-        echo "  ✅ Fetching (Lambda functions with layers)"
-        echo "  ✅ Processing (Container image in ECR)"
-        echo "  ✅ Database (PostgreSQL with schema)"
+        echo "  ✅ Lambda Fetchers (OHLCV + Meta)"
+        echo "  ✅ AWS Batch Jobs (Consolidator + Resampler)"
+        echo "  ✅ Step Functions Pipeline"
+        echo "  ✅ EventBridge Schedule (21:00 UTC Mon-Fri)"
         echo ""
-        echo "🔗 Next Steps:"
-        echo "  1. Test Lambda functions in AWS Console"
-        echo "  2. Check container in ECR repository"
-        echo "  3. Verify database connection"
-        echo "  4. Monitor EventBridge schedules"
+        echo "🔗 AWS Console Links:"
+        echo "  • Lambda: https://ca-west-1.console.aws.amazon.com/lambda"
+        echo "  • Batch: https://ca-west-1.console.aws.amazon.com/batch"
+        echo "  • Step Functions: https://ca-west-1.console.aws.amazon.com/states"
     else
         echo ""
         echo "📋 Deployed Component: $COMPONENT"
@@ -147,7 +149,7 @@ show_summary() {
         echo "🔗 Next Steps:"
         echo "  1. Check component in AWS Console"
         echo "  2. Test functionality"
-        echo "  3. Monitor logs"
+        echo "  3. Monitor CloudWatch logs"
     fi
 }
 
@@ -164,17 +166,23 @@ case $COMPONENT in
     "fetching"|"processing"|"database")
         validate_prerequisites
         if [ "$COMPONENT" = "fetching" ]; then
-            # Build Lambda packages for fetching
-            if [ -f "fetching/deployment_packages/build_packages.sh" ]; then
-                cd fetching/deployment_packages
-                ./build_packages.sh
-                cd ../..
+            # Build and deploy Lambda packages for fetching
+            if [ -f "infrastructure/fetching/deployment_packages/deploy_lambda.sh" ]; then
+                cd infrastructure/fetching/deployment_packages
+                ./deploy_lambda.sh
+                cd ../../..
             fi
         elif [ "$COMPONENT" = "processing" ]; then
             # Build container for processing
-            if [ -f "processing/container_images/build_container.sh" ]; then
-                cd processing/container_images
-                ./build_container.sh
+            if [ -f "infrastructure/processing/build_batch_container.sh" ]; then
+                cd infrastructure/processing
+                ./build_batch_container.sh
+                cd ../..
+            fi
+            # Deploy Batch job definitions
+            if [ -f "infrastructure/processing/deploy_batch_jobs.sh" ]; then
+                cd infrastructure/processing
+                ./deploy_batch_jobs.sh
                 cd ../..
             fi
         fi
@@ -185,12 +193,12 @@ case $COMPONENT in
         validate_prerequisites
         build_artifacts
         ;;
-    "layer")
-        echo "🔧 Building and publishing Lambda Layer..."
+    "orchestration")
+        echo "🔄 Deploying Step Functions orchestration..."
         validate_prerequisites
-        if [ -f "fetching/deployment_packages/build_layer.sh" ]; then
-            cd fetching/deployment_packages
-            ./build_layer.sh --publish
+        if [ -f "infrastructure/orchestration/deploy_step_functions.sh" ]; then
+            cd infrastructure/orchestration
+            ./deploy_step_functions.sh
             cd ../..
         fi
         ;;
@@ -224,20 +232,21 @@ case $COMPONENT in
         echo ""
         echo "Environments: dev, staging, prod"
         echo "Components:"
-        echo "  all        - Deploy entire batch layer (default)"
-        echo "  fetching   - Deploy only fetching component"
-        echo "  processing - Deploy only processing component"
-        echo "  database   - Deploy only database component"
-        echo "  build      - Build artifacts only"
-        echo "  layer      - Build and publish Lambda Layer only"
-        echo "  init       - Initialize Terraform"
-        echo "  plan       - Plan infrastructure"
-        echo "  destroy    - Destroy infrastructure"
+        echo "  all           - Deploy entire batch layer (default)"
+        echo "  fetching      - Deploy Lambda functions"
+        echo "  processing    - Deploy AWS Batch jobs (container + job definitions)"
+        echo "  database      - Deploy database infrastructure"
+        echo "  orchestration - Deploy Step Functions pipeline"
+        echo "  build         - Build artifacts only"
+        echo "  init          - Initialize Terraform"
+        echo "  plan          - Plan infrastructure"
+        echo "  destroy       - Destroy infrastructure"
         echo ""
         echo "Examples:"
         echo "  ./deploy.sh dev all                    # Deploy everything to dev"
-        echo "  ./deploy.sh prod fetching             # Deploy only fetching to prod"
-        echo "  ./deploy.sh dev build                 # Build artifacts only"
+        echo "  ./deploy.sh dev fetching               # Deploy only Lambda fetchers"
+        echo "  ./deploy.sh dev processing             # Deploy only Batch jobs"
+        echo "  ./deploy.sh dev orchestration          # Deploy only Step Functions"
         exit 1
         ;;
 esac
