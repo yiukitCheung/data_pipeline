@@ -69,16 +69,16 @@ echo ""
 get_job_roles() {
     echo "🔍 Getting IAM roles from existing jobs..."
     EXISTING_JOB=$(aws batch describe-job-definitions \
-        --job-definition-name "$RESAMPLER_JOB_NAME" \
-        --status ACTIVE \
-        --region "$AWS_REGION" \
-        --query 'jobDefinitions[0]' \
-        --output json 2>/dev/null || echo "{}")
-    
+    --job-definition-name "$RESAMPLER_JOB_NAME" \
+    --status ACTIVE \
+    --region "$AWS_REGION" \
+    --query 'jobDefinitions[0]' \
+    --output json 2>/dev/null || echo "{}")
+
     if [ "$EXISTING_JOB" == "{}" ] || [ "$EXISTING_JOB" == "null" ]; then
         JOB_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ENVIRONMENT}-condvest-batch-processing-execution-role"
         EXECUTION_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ENVIRONMENT}-condvest-batch-processing-execution-role"
-    else
+else
         JOB_ROLE_ARN=$(echo "$EXISTING_JOB" | jq -r '.containerProperties.jobRoleArn // empty')
         EXECUTION_ROLE_ARN=$(echo "$EXISTING_JOB" | jq -r '.containerProperties.executionRoleArn // empty')
         JOB_ROLE_ARN="${JOB_ROLE_ARN:-arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ENVIRONMENT}-condvest-batch-processing-execution-role}"
@@ -90,10 +90,10 @@ get_job_roles() {
 
 # Deploy Consolidator Job
 deploy_consolidator() {
-    echo ""
+echo ""
     echo "📦 Deploying Consolidator Job Definition..."
     
-    JOB_DEF_JSON=$(cat <<EOF
+JOB_DEF_JSON=$(cat <<EOF
 {
     "jobDefinitionName": "${CONSOLIDATOR_JOB_NAME}",
     "type": "container",
@@ -190,13 +190,13 @@ deploy_resampler() {
 }
 EOF
 )
-    
-    RESULT=$(aws batch register-job-definition \
-        --cli-input-json "$JOB_DEF_JSON" \
-        --region "$AWS_REGION" \
-        --output json)
-    
-    REVISION=$(echo "$RESULT" | jq -r '.revision')
+
+RESULT=$(aws batch register-job-definition \
+    --cli-input-json "$JOB_DEF_JSON" \
+    --region "$AWS_REGION" \
+    --output json)
+
+REVISION=$(echo "$RESULT" | jq -r '.revision')
     echo "   ✅ Resampler: $RESAMPLER_JOB_NAME (revision $REVISION)"
 }
 

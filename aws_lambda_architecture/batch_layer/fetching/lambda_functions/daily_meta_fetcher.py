@@ -135,30 +135,40 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         # Parse event parameters
         symbols = event.get('symbols', None)
         batch_size = int(event.get('batch_size', '128'))
+        force_full_sync = event.get('force_full_sync', False)  # Force sync with Polygon API to discover new symbols
         
         # Create batch job record
         job_id = f"daily-metadata-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
         
-        logger.info(f"Starting metadata update job: {job_id}")
+        logger.info(f"Starting metadata update job: {job_id} (force_full_sync={force_full_sync})")
         
-        # Determine if the market is open
+        # Determine if the market is open (skip check if force_full_sync)
         market_status = polygon_client.get_market_status()
-        if market_status['market'] == 'closed':
-            logger.info(f"Skipping execution - market is closed")
+        if (market_status['market'] == 'closed') and (not force_full_sync):
+            logger.info(f"Skipping execution - market is closed (use force_full_sync=true to override)")
             return {
                 'statusCode': 200,
                 'body': json.dumps({'message': 'Skipping execution - market is closed'})
             }
             
         # Get symbols to process
-        if (symbols is None) and (len(rds_client.get_active_symbols()) != 0):
-            symbols = rds_client.get_active_symbols()
-            logger.info(f"Fetched {len(symbols)} active symbols from database")
-        elif symbols is None:
-            symbols = polygon_client.get_active_symbols()  # Fetch ALL symbols (no limit)
-            logger.info(f"No active symbols found in database, fetched {len(symbols)} active symbols from Polygon API")
+        if symbols is not None:
+            # Manual mode: use specified symbols
+            logger.info(f"📋 Manual mode: processing {len(symbols)} specified symbols")
+        elif force_full_sync:
+            # Force sync: always fetch from Polygon API to discover new symbols (IPOs, new listings)
+            symbols = polygon_client.get_active_symbols()
+            logger.info(f"🔄 Full sync mode: fetched {len(symbols)} symbols from Polygon API")
         else:
-            logger.info(f"Processing {len(symbols)} specified symbols")
+            # Incremental mode: update existing symbols from database
+            db_symbols = rds_client.get_active_symbols()
+            if db_symbols:
+                symbols = db_symbols
+                logger.info(f"📊 Incremental mode: updating {len(symbols)} existing symbols from database")
+            else:
+                # Bootstrap: database is empty, fetch from Polygon API
+                symbols = polygon_client.get_active_symbols()
+                logger.info(f"🚀 Bootstrap mode: fetched {len(symbols)} symbols from Polygon API (database was empty)")
         
         total_updated = 0
         failed_count = 0

@@ -47,6 +47,11 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
     - skip_market_check: Boolean to skip market status check (useful for testing)
     - backfill_missing: Boolean to auto-detect and fetch missing dates
     - max_backfill_days: Max number of days to backfill (default: 30)
+    
+    NEW: Historical backfill mode for new symbols
+    - historical_backfill: Boolean to enable 5-year historical fetch for NEW symbols
+    - years_back: Number of years to backfill (default: 5)
+    - new_symbols_only: Boolean to only fetch symbols not in watermark table (default: true)
     """
     
     try:
@@ -84,6 +89,23 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         force_execution = event.get('force', False)
         backfill_missing = event.get('backfill_missing', True)  # Default: auto-detect missing dates
         max_backfill_days = int(event.get('max_backfill_days', 30))  # Limit backfill to last 30 days
+        
+        # NEW: Historical backfill parameters
+        historical_backfill = event.get('historical_backfill', False)
+        years_back = int(event.get('years_back', 5))
+        new_symbols_only = event.get('new_symbols_only', True)
+        
+        # =========================================================================
+        # HISTORICAL BACKFILL MODE - Fetch 5 years of data for NEW symbols
+        # =========================================================================
+        if historical_backfill:
+            return handle_historical_backfill(
+                polygon_client=polygon_client,
+                rds_client=rds_client,
+                symbols=symbols,
+                years_back=years_back,
+                new_symbols_only=new_symbols_only
+            )
         
         # 📊 LOG EXECUTION MODE (IMPORTANT FOR PRODUCTION VISIBILITY)
         execution_mode = "UNKNOWN"
@@ -143,7 +165,14 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         # Get symbols to process
         if symbols is None:
             symbols = rds_client.get_active_symbols()
-            logger.info(f"Fetched {len(symbols)} active symbols from RDS TimescaleDB")
+            
+            # Fallback to Polygon API if database is empty (bootstrap mode)
+            if not symbols:
+                logger.warning("⚠️ No symbols in database, fetching from Polygon API (bootstrap mode)...")
+                symbols = polygon_client.get_active_symbols()
+                logger.info(f"Fetched {len(symbols)} symbols from Polygon API")
+            else:
+                logger.info(f"Fetched {len(symbols)} active symbols from RDS")
         
         batch_job.symbols_processed = symbols
         
@@ -610,3 +639,327 @@ def update_watermark(rds_client: RDSPostgresClient, symbols: List[str], fetch_da
         logger.error(f"❌ Error updating watermark: {str(e)}")
         # Don't fail Lambda for watermark update failures
         # Worst case: we re-process some data next run (idempotent)
+
+
+# =============================================================================
+# HISTORICAL BACKFILL MODE - Fetch 5 years of data for NEW symbols
+# =============================================================================
+
+def handle_historical_backfill(
+    polygon_client: PolygonClient,
+    rds_client: RDSPostgresClient,
+    symbols: List[str] = None,
+    years_back: int = 5,
+    new_symbols_only: bool = True
+) -> Dict[str, Any]:
+    """
+    Fetch 5 years of historical OHLCV data for NEW symbols
+    
+    This uses date-range API calls (1 call per symbol returns 5 years of data)
+    Much more efficient than day-by-day fetching!
+    
+    Args:
+        polygon_client: Polygon API client
+        rds_client: RDS database client
+        symbols: Optional list of specific symbols (if None, auto-detect new symbols)
+        years_back: Number of years of history to fetch (default: 5)
+        new_symbols_only: Only fetch for symbols not in watermark table
+    
+    Returns:
+        Lambda response dict
+    """
+    start_time = datetime.utcnow()
+    job_id = f"historical-backfill-{int(start_time.timestamp())}"
+    
+    logger.info(f"🚀 HISTORICAL BACKFILL MODE - Fetching {years_back} years of data")
+    logger.info(f"📋 Job ID: {job_id}")
+    
+    try:
+        # Step 1: Determine which symbols to backfill
+        if symbols:
+            # Explicit list provided
+            symbols_to_backfill = symbols
+            logger.info(f"📊 Using provided symbol list: {len(symbols_to_backfill)} symbols")
+        elif new_symbols_only:
+            # Auto-detect NEW symbols (in symbol_metadata but not in watermark)
+            symbols_to_backfill = get_new_symbols(rds_client)
+            if not symbols_to_backfill:
+                logger.info("✅ No new symbols found - all symbols already have historical data!")
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({
+                        'message': 'No new symbols to backfill',
+                        'job_id': job_id
+                    })
+                }
+            logger.info(f"📊 Found {len(symbols_to_backfill)} NEW symbols needing backfill")
+        else:
+            # Fetch ALL symbols from metadata (rare - use for full rebuild)
+            symbols_to_backfill = rds_client.get_active_symbols()
+            logger.info(f"📊 Full rebuild mode: {len(symbols_to_backfill)} symbols")
+        
+        # Step 2: Calculate date range
+        to_date = date.today()
+        from_date = to_date - timedelta(days=365 * years_back)
+        logger.info(f"📅 Date range: {from_date} to {to_date} ({years_back} years)")
+        
+        # Step 3: Fetch historical data using efficient date-range API
+        # Process in batches to avoid memory issues
+        batch_size = 50  # 50 symbols per batch
+        total_records = 0
+        symbols_processed = 0
+        
+        for i in range(0, len(symbols_to_backfill), batch_size):
+            batch_symbols = symbols_to_backfill[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (len(symbols_to_backfill) + batch_size - 1) // batch_size
+            
+            logger.info(f"📦 Processing batch {batch_num}/{total_batches}: {len(batch_symbols)} symbols")
+            
+            # Fetch 5 years of data for this batch (async, 5 concurrent)
+            symbol_data = asyncio.run(
+                polygon_client.fetch_batch_historical_ohlcv_async(
+                    symbols=batch_symbols,
+                    from_date=from_date,
+                    to_date=to_date,
+                    max_concurrent=5
+                )
+            )
+            
+            # Step 4: Write to S3 and RDS for each symbol
+            for symbol, ohlcv_list in symbol_data.items():
+                if not ohlcv_list:
+                    logger.warning(f"⚠️  No data returned for {symbol}")
+                    continue
+                
+                # Write to S3 (grouped by date)
+                s3_records = write_historical_to_s3(ohlcv_list, symbol)
+                
+                # Write to RDS (with 5-year retention filter)
+                rds_records = write_to_rds_with_retention(rds_client, ohlcv_list, retention_years=5)
+                
+                # Update watermark to latest date
+                latest_date = max(ohlcv.timestamp.date() for ohlcv in ohlcv_list)
+                update_watermark(rds_client, [symbol], latest_date)
+                
+                total_records += len(ohlcv_list)
+                symbols_processed += 1
+                
+                if symbols_processed % 10 == 0:
+                    logger.info(f"  ✅ Processed {symbols_processed}/{len(symbols_to_backfill)} symbols, {total_records:,} records")
+        
+        # Step 5: Done!
+        end_time = datetime.utcnow()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        logger.info(f"✅ ========== HISTORICAL BACKFILL COMPLETE ==========")
+        logger.info(f"📊 Symbols processed: {symbols_processed}")
+        logger.info(f"💾 Total records: {total_records:,}")
+        logger.info(f"📅 Date range: {from_date} to {to_date}")
+        logger.info(f"⏱️  Execution time: {execution_time:.1f}s")
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'message': f'Historical backfill completed for {symbols_processed} symbols',
+                'job_id': job_id,
+                'symbols_processed': symbols_processed,
+                'total_records': total_records,
+                'from_date': from_date.isoformat(),
+                'to_date': to_date.isoformat(),
+                'execution_time_seconds': execution_time
+            })
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Historical backfill failed: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'error': 'Historical backfill failed',
+                'message': str(e),
+                'job_id': job_id
+            })
+        }
+
+
+def get_new_symbols(rds_client: RDSPostgresClient, days_threshold: int = 7) -> List[str]:
+    """
+    Find symbols that need historical backfill:
+    1. Symbols NOT in watermark table (never fetched)
+    2. Symbols with watermark entry but only 1 record (just added, no history)
+    
+    This catches symbols that were just added and only have a few days of data.
+    
+    Args:
+        rds_client: RDS database client
+        days_threshold: Consider symbols "new" if they have less than this many days of history
+    
+    Returns:
+        List of symbol tickers needing historical backfill
+    """
+    try:
+        # Query 1: Symbols not in watermark at all (truly new)
+        query_not_in_watermark = """
+            SELECT sm.symbol, sm.type, sm.name, 'NO_WATERMARK' as reason
+            FROM symbol_metadata sm
+            LEFT JOIN data_ingestion_watermark diw 
+                ON sm.symbol = diw.symbol AND diw.is_current = TRUE
+            WHERE diw.symbol IS NULL
+              AND LOWER(sm.active) = 'true';
+        """
+        
+        # Query 2: Symbols with only 1 watermark record (just added, need full history)
+        # Count total watermark records per symbol - if only 1, it was just added
+        query_limited_history = """
+            SELECT sm.symbol, sm.type, sm.name, 'LIMITED_HISTORY' as reason
+            FROM symbol_metadata sm
+            JOIN (
+                SELECT symbol, COUNT(*) as record_count
+                FROM data_ingestion_watermark
+                GROUP BY symbol
+                HAVING COUNT(*) = 1
+            ) counts ON sm.symbol = counts.symbol
+            JOIN data_ingestion_watermark diw 
+                ON sm.symbol = diw.symbol AND diw.is_current = TRUE
+            WHERE LOWER(sm.active) = 'true'
+              AND diw.records_count <= 5  -- Only has a few records, not full history
+            ORDER BY sm.type, sm.symbol;
+        """
+        
+        # Execute both queries
+        result_no_watermark = rds_client.execute_query(query_not_in_watermark) or []
+        result_limited = rds_client.execute_query(query_limited_history) or []
+        
+        # Combine results (deduplicate by symbol)
+        all_results = result_no_watermark + result_limited
+        seen_symbols = set()
+        new_symbols = []
+        
+        for row in all_results:
+            symbol = row['symbol']
+            if symbol not in seen_symbols:
+                seen_symbols.add(symbol)
+                new_symbols.append(symbol)
+        
+        # Log breakdown by reason and type
+        reasons = {}
+        types = {}
+        for row in all_results:
+            reason = row.get('reason', 'UNKNOWN')
+            t = row.get('type', 'UNKNOWN')
+            reasons[reason] = reasons.get(reason, 0) + 1
+            types[t] = types.get(t, 0) + 1
+        
+        logger.info(f"📊 Symbols needing backfill: {len(new_symbols)}")
+        logger.info(f"   By reason: {reasons}")
+        logger.info(f"   By type: {types}")
+        
+        # Debug: Log sample of types and active values in metadata
+        try:
+            # Check what active values exist
+            active_query = """
+                SELECT active, COUNT(*) as cnt 
+                FROM symbol_metadata 
+                GROUP BY active 
+                ORDER BY cnt DESC
+                LIMIT 10;
+            """
+            active_counts = rds_client.execute_query(active_query) or []
+            logger.info(f"   📋 Active column values: {active_counts}")
+            
+            # Check types without active filter
+            type_query = """
+                SELECT type, COUNT(*) as cnt 
+                FROM symbol_metadata 
+                GROUP BY type 
+                ORDER BY cnt DESC
+                LIMIT 10;
+            """
+            type_counts = rds_client.execute_query(type_query) or []
+            logger.info(f"   📋 All types in symbol_metadata: {type_counts}")
+            
+            # Check total count
+            count_query = "SELECT COUNT(*) as total FROM symbol_metadata;"
+            total = rds_client.execute_query(count_query) or []
+            logger.info(f"   📋 Total symbols in metadata: {total}")
+        except Exception as debug_err:
+            logger.warning(f"   Debug query failed: {debug_err}")
+        
+        return new_symbols
+        
+    except Exception as e:
+        logger.error(f"❌ Error finding new symbols: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return []
+
+
+def write_historical_to_s3(ohlcv_list: List[OHLCVData], symbol: str) -> int:
+    """
+    Write historical OHLCV data to S3, grouped by date
+    
+    Path format: s3://bucket/bronze/raw_ohlcv/symbol=AAPL/date=2020-01-02.parquet
+    
+    Args:
+        ohlcv_list: List of OHLCV data objects (potentially spanning 5 years)
+        symbol: Stock symbol
+    
+    Returns:
+        Number of records written
+    """
+    if not ohlcv_list:
+        return 0
+    
+    try:
+        s3_client = boto3.client('s3')
+        
+        # Group by date
+        date_groups = {}
+        for ohlcv in ohlcv_list:
+            ohlcv_date = ohlcv.timestamp.date()
+            if ohlcv_date not in date_groups:
+                date_groups[ohlcv_date] = []
+            date_groups[ohlcv_date].append(ohlcv)
+        
+        records_written = 0
+        
+        for ohlcv_date, day_data in date_groups.items():
+            # S3 key: bronze/raw_ohlcv/symbol=AAPL/date=2020-01-02.parquet
+            s3_key = f"{S3_BRONZE_PREFIX}/symbol={symbol}/date={ohlcv_date.isoformat()}.parquet"
+            
+            # Convert to PyArrow Table
+            table = pa.table({
+                'symbol': [ohlcv.symbol for ohlcv in day_data],
+                'open': [float(ohlcv.open) for ohlcv in day_data],
+                'high': [float(ohlcv.high) for ohlcv in day_data],
+                'low': [float(ohlcv.low) for ohlcv in day_data],
+                'close': [float(ohlcv.close) for ohlcv in day_data],
+                'volume': [int(ohlcv.volume) for ohlcv in day_data],
+                'timestamp': [ohlcv.timestamp for ohlcv in day_data],
+                'interval': [ohlcv.interval for ohlcv in day_data]
+            })
+            
+            # Write to parquet in memory
+            parquet_buffer = BytesIO()
+            pq.write_table(table, parquet_buffer, compression='snappy')
+            parquet_buffer.seek(0)
+            
+            # Write to S3
+            s3_client.put_object(
+                Bucket=S3_BUCKET,
+                Key=s3_key,
+                Body=parquet_buffer.getvalue(),
+                ContentType='application/x-parquet'
+            )
+            
+            records_written += len(day_data)
+        
+        logger.debug(f"📦 Wrote {records_written} records for {symbol} ({len(date_groups)} days) to S3")
+        return records_written
+        
+    except Exception as e:
+        logger.error(f"❌ Error writing historical data to S3 for {symbol}: {str(e)}")
+        raise

@@ -1,5 +1,5 @@
 # DuckDB + S3 + RDS Batch Jobs - AWS Batch Container
-# Supports: Resampler, Consolidator
+# Supports: Resampler, Consolidator, Historical Backfill
 FROM python:3.11-slim
 
 # Build arguments
@@ -47,5 +47,5 @@ RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app
 USER app
 
 # Entry point script that runs the appropriate job based on JOB_TYPE
-# Default: resampler (can be overridden by passing JOB_TYPE=consolidator)
-CMD ["sh", "-c", "if [ \"$JOB_TYPE\" = \"consolidator\" ]; then python consolidator.py; else python resampler.py; fi"]
+# Options: resampler (default), consolidator, historical_backfill
+CMD ["sh", "-c", "case \"$JOB_TYPE\" in consolidator) python consolidator.py ;; historical_backfill) python historical_backfill.py ;; *) python resampler.py ;; esac"]
